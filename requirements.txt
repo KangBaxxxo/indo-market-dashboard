@@ -1,8 +1,8 @@
 streamlit
 pandas
-sqlalchemy
-psycopg2-binary
-python-dotenv
+numpy
 yfinance
+sqlalchemy
 ta
 plotly
+openpyxl
