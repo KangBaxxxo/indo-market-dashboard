@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import sqlite3
 from pathlib import Path
 
 
@@ -9,6 +10,54 @@ SCRIPTS = [
     "backtest_gold.py",
     "notify_gold_signal.py",
 ]
+
+
+def check_database(label):
+    db_path = Path("data/market.db")
+
+    print()
+    print("=" * 60)
+    print(f"DATABASE CHECK: {label}")
+    print("=" * 60)
+
+    if not db_path.exists():
+        print("ERROR: data/market.db tidak ditemukan.")
+        return False
+
+    print(f"DB path: {db_path}")
+    print(f"DB size: {db_path.stat().st_size} bytes")
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    )
+
+    tables = [row[0] for row in cur.fetchall()]
+
+    print("Tables:")
+    for table in tables:
+        print(f"- {table}")
+
+    if "daily_prices" in tables:
+        cur.execute("SELECT COUNT(*) FROM daily_prices")
+        count_daily_prices = cur.fetchone()[0]
+        print(f"daily_prices rows: {count_daily_prices}")
+    else:
+        print("ERROR: table daily_prices tidak ada.")
+        conn.close()
+        return False
+
+    if "latest_snapshot" in tables:
+        cur.execute("SELECT COUNT(*) FROM latest_snapshot")
+        count_latest_snapshot = cur.fetchone()[0]
+        print(f"latest_snapshot rows: {count_latest_snapshot}")
+    else:
+        print("WARNING: table latest_snapshot tidak ada.")
+
+    conn.close()
+    return True
 
 
 def run_script(script_name):
@@ -42,8 +91,17 @@ def run_script(script_name):
 def main():
     failed_scripts = []
 
+    check_database("BEFORE PIPELINE")
+
     for script in SCRIPTS:
         success = run_script(script)
+
+        if script == "update_data.py":
+            db_ok = check_database("AFTER update_data.py")
+
+            if not db_ok:
+                failed_scripts.append("database_check_after_update_data")
+                break
 
         if not success:
             failed_scripts.append(script)
