@@ -40,21 +40,19 @@ def check_database(label):
     for table in tables:
         print(f"- {table}")
 
-    if "daily_prices" in tables:
-        cur.execute("SELECT COUNT(*) FROM daily_prices")
-        count_daily_prices = cur.fetchone()[0]
-        print(f"daily_prices rows: {count_daily_prices}")
-    else:
+    if "daily_prices" not in tables:
         print("ERROR: table daily_prices tidak ada.")
         conn.close()
         return False
 
+    cur.execute("SELECT COUNT(*) FROM daily_prices")
+    print("daily_prices rows:", cur.fetchone()[0])
+
     if "latest_snapshot" in tables:
         cur.execute("SELECT COUNT(*) FROM latest_snapshot")
-        count_latest_snapshot = cur.fetchone()[0]
-        print(f"latest_snapshot rows: {count_latest_snapshot}")
+        print("latest_snapshot rows:", cur.fetchone()[0])
     else:
-        print("WARNING: table latest_snapshot tidak ada.")
+        print("WARNING: latest_snapshot tidak ada.")
 
     conn.close()
     return True
