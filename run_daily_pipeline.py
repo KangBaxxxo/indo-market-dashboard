@@ -6,6 +6,7 @@ from pathlib import Path
 
 SCRIPTS = [
     "update_data.py",
+    "update_gold_watchlist_latest.py",
     "update_drivers.py",
     "backtest_gold.py",
     "notify_gold_signal.py",
