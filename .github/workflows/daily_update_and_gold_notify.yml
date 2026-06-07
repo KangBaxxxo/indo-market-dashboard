@@ -27,13 +27,34 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run daily pipeline
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python run_daily_pipeline.py
+      run: |
+        echo "=== CURRENT COMMIT ==="
+        git rev-parse HEAD
 
+        echo "=== CHECK run_daily_pipeline.py CONTENT ==="
+        grep -n "DATABASE CHECK" run_daily_pipeline.py || true
+        grep -n "check_database" run_daily_pipeline.py || true
+
+        echo "=== CHECK DATABASE BEFORE RUN ==="
+        python - <<'EOF'
+        import sqlite3
+        from pathlib import Path
+
+        db = Path("data/market.db")
+        print("DB exists:", db.exists())
+        print("DB size:", db.stat().st_size if db.exists() else "N/A")
+
+        if db.exists():
+            conn = sqlite3.connect(db)
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            print("Tables:", cur.fetchall())
+            conn.close()
+        EOF
+
+        echo "=== RUN PIPELINE ==="
+        python -u run_daily_pipeline.py
+        
       - name: Commit updated data
         run: |
           git config user.name "github-actions"
