@@ -3,8 +3,8 @@ name: Daily Update and Gold Signal Notify
 on:
   workflow_dispatch:
   schedule:
-    # 00:15 UTC = 07:15 WIB, Senin-Jumat
-    - cron: "15 0 * * 1-5"
+    # 00:15 UTC = 06:15 WIB, Senin-Jumat
+    - cron: "15 18 * * 0-4"
 
 permissions:
   contents: write
