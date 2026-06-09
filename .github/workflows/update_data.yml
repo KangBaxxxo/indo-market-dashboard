@@ -2,34 +2,107 @@ name: Update Market Data
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  
+
 on:
   schedule:
-    - cron: '30 9 * * 1-5'
-
+    # 09:30 UTC = 16:30 WIB, Senin-Jumat
+    - cron: "30 9 * * 1-5"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   update-data:
-
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout Repo
         uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install Dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run ETL
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Update stock market data
         run: |
-          python update_data.py
+          python -u update_data.py
+
+      - name: Update yfinance driver prices
+        run: |
+          python -u update_drivers.py
+
+      - name: Build latest driver signals
+        run: |
+          python -u latest_driver_signals.py
+
+      - name: Check updated data
+        run: |
+          python - <<'PY'
+          import sqlite3
+          import pandas as pd
+
+          print("=== DRIVER PRICES ===")
+          driver = pd.read_csv("data/driver_prices.csv")
+          driver["driver_date"] = pd.to_datetime(driver["driver_date"], format="mixed", errors="coerce")
+
+          print(
+              driver.groupby("driver").agg(
+                  rows=("value", "count"),
+                  latest_date=("driver_date", "max"),
+                  latest_value=("value", "last"),
+              ).to_string()
+          )
+
+          print("")
+          print("=== LATEST DRIVER SIGNALS ===")
+          signals = pd.read_csv("data/processed/latest_driver_signals.csv")
+          print(signals[[ 
+              "driver_group",
+              "driver_symbol",
+              "driver_latest_date",
+              "driver_return_pct",
+              "signal_status",
+              "last_signal_date",
+          ]].to_string(index=False))
+
+          print("")
+          print("=== MARKET DB SNAPSHOT ===")
+          con = sqlite3.connect("data/market.db")
+          snap = pd.read_sql("""
+              SELECT ticker, trade_date, close_price, volume
+              FROM latest_snapshot
+              WHERE ticker IN (
+                  'HRTA.JK', 'ANTM.JK', 'MDKA.JK', 'BRMS.JK', 'EMAS.JK',
+                  'ADRO.JK', 'PTBA.JK', 'ITMG.JK', 'HRUM.JK', 'BYAN.JK', 'BUMI.JK',
+                  'INCO.JK', 'NCKL.JK', 'MBMA.JK'
+              )
+              ORDER BY ticker
+          """, con)
+          con.close()
+
+          print(snap.to_string(index=False))
+          PY
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add data/market.db || true
+          git add data/driver_prices.csv || true
+          git add data/driver_scores.csv || true
+          git add data/processed/latest_driver_signals.csv || true
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "daily market and driver data update"
+            git push
+          fi
