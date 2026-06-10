@@ -32,4 +32,4 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          python app.py
+          python update_data.py
