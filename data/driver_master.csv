@@ -2,3 +2,5 @@ driver,yahoo_ticker,category
 USDIDR,IDR=X,Currency
 OIL,CL=F,Commodity
 GOLD,GC=F,Commodity
+NICKEL,^SPGSIK,Commodity
+USD index,DX-Y.NYB,Currency

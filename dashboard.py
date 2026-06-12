@@ -16,20 +16,15 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 # =========================
-# QUERY
+# LOAD DATA
 # =========================
 
-query = """
-SELECT *
-FROM daily_prices
-"""
-
-@st.cache_data
-def load_data():
+@st.cache_data(ttl=3600)
+def load_snapshot():
 
     query = """
     SELECT *
-    FROM daily_prices
+    FROM latest_snapshot
     """
 
     return pd.read_sql(
@@ -37,126 +32,67 @@ def load_data():
         engine
     )
 
-df = load_data()
+
+@st.cache_data(ttl=3600)
+def load_price_data(ticker, start_date, end_date):
+
+    query = """
+    SELECT *
+    FROM daily_prices
+    WHERE ticker = %(ticker)s
+    AND trade_date >= %(start_date)s
+    AND trade_date <= %(end_date)s
+    ORDER BY trade_date
+    """
+
+    return pd.read_sql(
+        query,
+        engine,
+        params={
+            "ticker": ticker,
+            "start_date": start_date,
+            "end_date": end_date
+        }
+    )
 
 
-# =========================
-# FIX TIMEZONE
-# =========================
+latest_df = load_snapshot()
 
-df["trade_date"] = pd.to_datetime(
-    df["trade_date"]
-).dt.tz_localize(None)
-latest_update = df["trade_date"].max()
-
-# =========================
-# DOWNLOAD FULL DATA
-# =========================
-
-csv_all = df.to_csv(
-    index=False
-).encode(
-    "utf-8"
-)
-
-st.sidebar.download_button(
-    label="Download Semua Data CSV",
-    data=csv_all,
-    file_name="indo_market_dashboard_data.csv",
-    mime="text/csv"
-)
-
-# =========================
-# LATEST DATA PER TICKER
-# =========================
-
-latest_df = df.sort_values(
-    "trade_date"
-).groupby(
-    "ticker"
-).tail(1)
-
-import streamlit as st
-import pandas as pd
-from sqlalchemy import create_engine
-from dotenv import load_dotenv
-import os
-import plotly.graph_objects as go
-
-# =========================
-# LOAD ENV
-# =========================
-
-load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-engine = create_engine(DATABASE_URL)
-
-# =========================
-# QUERY
-# =========================
-
-query = """
-SELECT *
-FROM daily_prices
-"""
-
-df = pd.read_sql(query, engine)
-
-# =========================
-# FIX TIMEZONE
-# =========================
-
-df["trade_date"] = pd.to_datetime(
-    df["trade_date"]
+latest_df["trade_date"] = pd.to_datetime(
+    latest_df["trade_date"]
 ).dt.tz_localize(None)
 
-latest_update = df["trade_date"].max()
-
-# =========================
-# LATEST DATA PER TICKER
-# =========================
-
-latest_df = df.sort_values(
-    "trade_date"
-).groupby(
-    "ticker"
-).tail(1)
-
-# =========================
-# VOLUME AVG
-# =========================
-
-volume_avg = df.groupby(
-    "ticker"
-)["volume"].mean()
-
-latest_df["avg_volume"] = latest_df[
-    "ticker"
-].map(volume_avg)
+latest_update = latest_df["trade_date"].max()
 
 # =========================
 # SIDEBAR
 # =========================
 
 ticker_list = sorted(
-    df["ticker"].unique()
+    latest_df["ticker"].unique()
 )
 
-ticker_options = (
-    latest_df["name"]
+ticker_options_df = latest_df[
+    [
+        "ticker",
+        "name"
+    ]
+].drop_duplicates()
+
+ticker_options_df["label"] = (
+    ticker_options_df["name"]
     +
     " ("
     +
-    latest_df["ticker"]
+    ticker_options_df["ticker"]
     +
     ")"
-).tolist()
+)
 
 selected_option = st.sidebar.selectbox(
     "Cari Saham",
-    sorted(ticker_options)
+    ticker_options_df["label"].sort_values(),
+    index=0
 )
 
 selected_ticker = selected_option.split(
@@ -170,8 +106,7 @@ portfolio_watchlist = st.sidebar.multiselect(
     "Portfolio Monitor",
     ticker_list,
     default=[
-        "BBCA.JK",
-        "BBRI.JK"
+        "BTPN.JK"
     ]
 )
 
@@ -180,6 +115,57 @@ sr_period = st.sidebar.selectbox(
     [20, 50, 100],
     index=0
 )
+
+range_option = st.sidebar.radio(
+    "Range Data",
+    [
+        "1D",
+        "1W",
+        "3M",
+        "1Y",
+        "5Y",
+        "Custom"
+    ],
+    horizontal=True
+)
+
+max_date = latest_update
+min_date = max_date - pd.DateOffset(years=5)
+
+if range_option == "1D":
+
+    start_date = max_date.normalize()
+
+elif range_option == "1W":
+
+    start_date = max_date - pd.DateOffset(weeks=1)
+
+elif range_option == "3M":
+
+    start_date = max_date - pd.DateOffset(months=3)
+
+elif range_option == "1Y":
+
+    start_date = max_date - pd.DateOffset(years=1)
+
+elif range_option == "5Y":
+
+    start_date = max_date - pd.DateOffset(years=5)
+
+else:
+
+    custom_start, custom_end = st.sidebar.date_input(
+        "Custom Date",
+        [
+            min_date.date(),
+            max_date.date()
+        ]
+    )
+
+    start_date = pd.to_datetime(custom_start)
+    max_date = pd.to_datetime(custom_end)
+
+end_date = max_date
 
 screen_option = st.sidebar.selectbox(
     "Screener",
@@ -193,24 +179,53 @@ screen_option = st.sidebar.selectbox(
 )
 
 screen_notes = {
-    "All":
-    "Menampilkan semua saham.",
-
-    "RSI Oversold":
-    "RSI < 30. Menandakan saham oversold dan berpotensi rebound.",
-
-    "Bullish Trend":
-    "Harga berada di atas MA50. Trend menengah bullish.",
-
-    "Golden Cross":
-    "MA20 berada di atas MA50. Momentum bullish.",
-
-    "Volume Spike":
-    "Volume hari ini > 2x rata-rata volume."
+    "All": "Menampilkan semua saham.",
+    "RSI Oversold": "RSI < 30. Menandakan saham oversold dan berpotensi rebound.",
+    "Bullish Trend": "Harga berada di atas MA50. Trend menengah bullish.",
+    "Golden Cross": "MA20 berada di atas MA50. Momentum bullish.",
+    "Volume Spike": "Volume hari ini > 2x rata-rata volume."
 }
 
 st.sidebar.info(
     screen_notes[screen_option]
+)
+
+# =========================
+# LOAD SELECTED PRICE DATA
+# =========================
+
+filtered_df = load_price_data(
+    selected_ticker,
+    start_date,
+    end_date
+)
+
+filtered_df["trade_date"] = pd.to_datetime(
+    filtered_df["trade_date"]
+).dt.tz_localize(None)
+
+filtered_df = filtered_df.sort_values(
+    by="trade_date"
+)
+
+if filtered_df.empty:
+
+    st.error(
+        "Tidak ada data untuk range yang dipilih."
+    )
+
+    st.stop()
+
+latest = filtered_df.iloc[-1]
+
+# =========================
+# TITLE
+# =========================
+
+st.title("Dashboard Saham Indonesia")
+
+st.caption(
+    f"Last data update: {latest_update.strftime('%d-%m-%Y %H:%M WIB')}"
 )
 
 # =========================
@@ -219,9 +234,7 @@ st.sidebar.info(
 
 bullish_count = len(
     latest_df[
-        latest_df["close_price"]
-        >
-        latest_df["ma50"]
+        latest_df["close_price"] > latest_df["ma50"]
     ]
 )
 
@@ -233,27 +246,13 @@ oversold_count = len(
 
 golden_cross_count = len(
     latest_df[
-        latest_df["ma20"]
-        >
-        latest_df["ma50"]
+        latest_df["ma20"] > latest_df["ma50"]
     ]
 )
 
-# VOLUME SPIKE
-
-volume_avg = df.groupby(
-    "ticker"
-)["volume"].mean()
-
-latest_df["avg_volume"] = latest_df[
-    "ticker"
-].map(volume_avg)
-
 volume_spike_count = len(
     latest_df[
-        latest_df["volume"]
-        >
-        latest_df["avg_volume"] * 2
+        latest_df["volume"] > latest_df["avg_volume"] * 2
     ]
 )
 
@@ -270,9 +269,7 @@ sector_summary = latest_df.groupby(
 
 bullish_sector = (
     latest_df[
-        latest_df["close_price"]
-        >
-        latest_df["ma50"]
+        latest_df["close_price"] > latest_df["ma50"]
     ]
     .groupby("sector")
     .size()
@@ -315,25 +312,10 @@ st.subheader("Market Breadth")
 
 b1, b2, b3, b4 = st.columns(4)
 
-b1.metric(
-    "Bullish",
-    bullish_count
-)
-
-b2.metric(
-    "Oversold",
-    oversold_count
-)
-
-b3.metric(
-    "Golden Cross",
-    golden_cross_count
-)
-
-b4.metric(
-    "Volume Spike",
-    volume_spike_count
-)
+b1.metric("Bullish", bullish_count)
+b2.metric("Oversold", oversold_count)
+b3.metric("Golden Cross", golden_cross_count)
+b4.metric("Volume Spike", volume_spike_count)
 
 # =========================
 # MOMENTUM RANKING
@@ -358,21 +340,24 @@ momentum_df["ma_distance"] = (
     momentum_df["ma_distance"]
 ).round(2).astype(str) + "%"
 
-st.subheader(
-    "Top Momentum Stocks"
-)
+with st.expander(
+    "Top Momentum Stocks",
+    expanded=False
+):
 
-st.dataframe(
-    momentum_df[
-        [
-            "ticker",
-            "close_price",
-            "rsi",
-            "ma_distance",
-            "volume"
-        ]
-    ].head(10)
-)
+    st.dataframe(
+        momentum_df[
+            [
+                "ticker",
+                "name",
+                "sector",
+                "close_price",
+                "rsi",
+                "ma_distance",
+                "volume"
+            ]
+        ].head(10)
+    )
 
 # =========================
 # SELL SIGNAL ENGINE
@@ -381,10 +366,7 @@ st.dataframe(
 sell_df = latest_df.copy()
 
 sell_df["sell_signal"] = "HOLD"
-
 sell_df["sell_score"] = 0
-
-# WEAK MOMENTUM
 
 sell_df.loc[
     sell_df["rsi"] < 45,
@@ -396,49 +378,25 @@ sell_df.loc[
     "sell_score"
 ] += 20
 
-# TREND BREAKDOWN
-
 sell_df.loc[
-    sell_df["close_price"]
-    <
-    sell_df["ma20"],
+    sell_df["close_price"] < sell_df["ma20"],
     "sell_signal"
 ] = "Trend Breakdown"
 
 sell_df.loc[
-    sell_df["close_price"]
-    <
-    sell_df["ma20"],
+    sell_df["close_price"] < sell_df["ma20"],
     "sell_score"
 ] += 30
 
-# BEARISH TREND
-
 sell_df.loc[
-    sell_df["ma20"]
-    <
-    sell_df["ma50"],
+    sell_df["ma20"] < sell_df["ma50"],
     "sell_signal"
 ] = "Bearish Trend"
 
 sell_df.loc[
-    sell_df["ma20"]
-    <
-    sell_df["ma50"],
+    sell_df["ma20"] < sell_df["ma50"],
     "sell_score"
 ] += 50
-
-# SHOW TABLE
-
-st.subheader(
-    "Sell Signal Monitor"
-)
-
-st.caption(
-    "Signal berdasarkan kondisi 20 hari terakhir."
-)
-
-# FILTER SELL CANDIDATE
 
 sell_candidates = sell_df[
     (sell_df["sell_signal"] != "HOLD")
@@ -449,22 +407,32 @@ sell_candidates = sell_df[
         )
     )
 ]
-st.dataframe(
-    sell_candidates[
-        [
-            "ticker",
-            "name",
-            "sector",
-            "close_price",
-            "rsi",
-            "sell_signal",
-            "sell_score"
-        ]
-    ].sort_values(
-    by="sell_score",
-    ascending=False
+
+with st.expander(
+    "Sell Signal Monitor",
+    expanded=True
+):
+
+    st.caption(
+        "Signal berdasarkan kondisi terbaru masing-masing saham portfolio monitor."
     )
-)
+
+    st.dataframe(
+        sell_candidates[
+            [
+                "ticker",
+                "name",
+                "sector",
+                "close_price",
+                "rsi",
+                "sell_signal",
+                "sell_score"
+            ]
+        ].sort_values(
+            by="sell_score",
+            ascending=False
+        )
+    )
 
 # =========================
 # SCREENER LOGIC
@@ -475,70 +443,50 @@ screened_df = latest_df.copy()
 screened_df["status"] = ""
 screened_df["score"] = 0
 
-# OVERSOLD
-
 screened_df.loc[
     screened_df["rsi"] < 30,
     "status"
 ] += "Oversold | "
+
 screened_df.loc[
     screened_df["rsi"] < 30,
     "score"
 ] += 20
 
-# BULLISH
-
 screened_df.loc[
-    screened_df["close_price"]
-    >
-    screened_df["ma50"],
+    screened_df["close_price"] > screened_df["ma50"],
     "status"
 ] += "Bullish | "
+
 screened_df.loc[
-    screened_df["close_price"]
-    >
-    screened_df["ma50"],
+    screened_df["close_price"] > screened_df["ma50"],
     "score"
 ] += 30
 
-# GOLDEN CROSS
-
 screened_df.loc[
-    screened_df["ma20"]
-    >
-    screened_df["ma50"],
+    screened_df["ma20"] > screened_df["ma50"],
     "status"
 ] += "Golden Cross | "
+
 screened_df.loc[
-    screened_df["ma20"]
-    >
-    screened_df["ma50"],
+    screened_df["ma20"] > screened_df["ma50"],
     "score"
 ] += 30
 
-# VOLUME SPIKE
-
 screened_df.loc[
-    screened_df["volume"]
-    >
-    screened_df["avg_volume"] * 2,
+    screened_df["volume"] > screened_df["avg_volume"] * 2,
     "status"
 ] += "Volume Spike | "
+
 screened_df.loc[
-    screened_df["volume"]
-    >
-    screened_df["avg_volume"] * 2,
+    screened_df["volume"] > screened_df["avg_volume"] * 2,
     "score"
 ] += 20
-
-# DEFAULT
 
 screened_df.loc[
     screened_df["status"] == "",
     "status"
 ] = "Neutral"
-
-# REMOVE LAST |
 
 screened_df["status"] = screened_df[
     "status"
@@ -553,70 +501,24 @@ if screen_option == "RSI Oversold":
 elif screen_option == "Bullish Trend":
 
     screened_df = screened_df[
-        screened_df["close_price"]
-        >
-        screened_df["ma50"]
+        screened_df["close_price"] > screened_df["ma50"]
     ]
 
 elif screen_option == "Golden Cross":
 
     screened_df = screened_df[
-        screened_df["ma20"]
-        >
-        screened_df["ma50"]
+        screened_df["ma20"] > screened_df["ma50"]
     ]
 
 elif screen_option == "Volume Spike":
 
     screened_df = screened_df[
-        screened_df["volume"]
-        >
-        screened_df["avg_volume"] * 2
+        screened_df["volume"] > screened_df["avg_volume"] * 2
     ]
 
 # =========================
-# DATE RANGE
+# DOWNLOAD SELECTED DATA
 # =========================
-
-min_date = df["trade_date"].min()
-
-max_date = df["trade_date"].max()
-
-start_date = st.sidebar.date_input(
-    "From",
-    value=min_date
-)
-
-end_date = st.sidebar.date_input(
-    "To",
-    value=max_date
-)
-
-start_date = pd.to_datetime(
-    start_date
-)
-
-end_date = pd.to_datetime(
-    end_date
-)
-
-# =========================
-# FILTER DATA
-# =========================
-
-filtered_df = df[
-    (df["ticker"] == selected_ticker)
-    &
-    (df["trade_date"] >= start_date)
-    &
-    (df["trade_date"] <= end_date)
-]
-
-filtered_df = filtered_df.sort_values(
-    by="trade_date"
-)
-
-latest = filtered_df.iloc[-1]
 
 csv_filtered = filtered_df.to_csv(
     index=False
@@ -714,30 +616,31 @@ if resistance_distance < 3:
 # SCREENER TABLE
 # =========================
 
-st.subheader(
-    f"Screener: {screen_option}"
-)
+with st.expander(
+    f"Screener: {screen_option}",
+    expanded=False
+):
 
-st.dataframe(
-    screened_df[
-        [
-            "ticker",
-            "name",
-            "sector",
-            "board",
-            "score",
-            "status",
-            "close_price",
-            "rsi",
-            "ma20",
-            "ma50",
-            "volume"
-        ]
-    ].sort_values(
-    by="score",
-    ascending=False
+    st.dataframe(
+        screened_df[
+            [
+                "ticker",
+                "name",
+                "sector",
+                "board",
+                "score",
+                "status",
+                "close_price",
+                "rsi",
+                "ma20",
+                "ma50",
+                "volume"
+            ]
+        ].sort_values(
+            by="score",
+            ascending=False
+        )
     )
-)
 
 # =========================
 # CANDLESTICK CHART
@@ -760,8 +663,6 @@ fig.add_trace(
     )
 )
 
-# MA20
-
 fig.add_trace(
     go.Scatter(
         x=filtered_df["trade_date"],
@@ -774,8 +675,6 @@ fig.add_trace(
         )
     )
 )
-
-# MA50
 
 fig.add_trace(
     go.Scatter(
@@ -807,6 +706,11 @@ st.plotly_chart(
 # DATA TABLE
 # =========================
 
-st.dataframe(
-    filtered_df.tail(20)
-)
+with st.expander(
+    "Data Saham",
+    expanded=False
+):
+
+    st.dataframe(
+        filtered_df.tail(100)
+    )

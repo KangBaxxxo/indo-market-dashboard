@@ -1,1506 +1,1401 @@
-import streamlit as st
+import sqlite3
+from pathlib import Path
+
 import pandas as pd
 import plotly.graph_objects as go
-from sqlalchemy import create_engine
+import streamlit as st
+
+
+# ======================
+# PAGE CONFIG
+# ======================
 
 st.set_page_config(
     page_title="Indonesia Market Dashboard",
-    layout="wide"
+    layout="wide",
 )
 
-engine = create_engine("sqlite:///data/market.db")
 
 # ======================
-# LOAD DATA
+# PATHS
 # ======================
 
-latest_df = pd.read_sql(
-    "SELECT * FROM latest_snapshot",
-    engine
-)
+DB_PATH = "data/market.db"
+DRIVER_CSV_PATH = "data/driver_prices.csv"
+PROCESSED_DIR = Path("data/processed")
+LATEST_SIGNAL_PATH = PROCESSED_DIR / "latest_driver_signals.csv"
 
-latest_df["trade_date"] = pd.to_datetime(latest_df["trade_date"])
-
-# ======================
-# Driver Opportunities
-# ======================
-page = st.sidebar.selectbox(
-    "Menu",
-    [
-        "Dashboard",
-        "Driver Opportunities",
-        "Economic Intelligence"
-    ]
-)
 
 # ======================
-# ECONOMIC INTELLIGENCE
+# DRIVER CONFIG
 # ======================
 
-if page == "Economic Intelligence":
-    st.title("Economic Intelligence")
-
-    st.caption(
-        "Final pattern: GOLD naik >= 5% dalam 10 hari, "
-        "cooldown 20 hari, hold 10 hari. Target utama: HRTA.JK"
-    )
-
-    TARGET_TICKER = "HRTA.JK"
-    DRIVER = "GOLD"
-    LOOKBACK = 10
-    THRESHOLD = 5.0
-    COOLDOWN_DAYS = 20
-    HOLD_DAYS = 10
-
-    # ======================
-    # LOAD DRIVER PRICES
-    # ======================
-
-    driver_prices_df = pd.read_csv("data/driver_prices.csv")
-    driver_prices_df.columns = (
-        driver_prices_df.columns
-        .str.strip()
-        .str.lower()
-    )
-
-    driver_prices_df["driver_date"] = pd.to_datetime(
-        driver_prices_df["driver_date"],
-        format="mixed",
-        errors="coerce"
-    )
-
-    driver_prices_df["value"] = pd.to_numeric(
-        driver_prices_df["value"],
-        errors="coerce"
-    )
-
-    gold_df = driver_prices_df[
-        driver_prices_df["driver"].str.upper() == DRIVER
-    ].copy()
-
-    gold_df = gold_df.dropna(
-        subset=["driver_date", "value"]
-    ).copy()
-
-    gold_df = gold_df.sort_values(
-        "driver_date"
-    ).reset_index(drop=True)
-
-    gold_df["gold_10d_change_pct"] = (
-        gold_df["value"].pct_change(LOOKBACK) * 100
-    )
-
-    latest_gold = gold_df.dropna(
-        subset=["gold_10d_change_pct"]
-    ).tail(1)
-
-    if latest_gold.empty:
-        st.warning("Data GOLD belum cukup untuk menghitung 10D change.")
-        st.stop()
-
-    latest_gold_row = latest_gold.iloc[0]
-
-    latest_gold_date = latest_gold_row["driver_date"]
-    latest_gold_value = latest_gold_row["value"]
-    latest_gold_change = latest_gold_row["gold_10d_change_pct"]
-
-    # ======================
-    # BUILD HISTORICAL GOLD EVENTS
-    # ======================
-
-    gold_events = gold_df[
-        gold_df["gold_10d_change_pct"] >= THRESHOLD
-    ].copy()
-
-    gold_events = gold_events.rename(
-        columns={"driver_date": "event_date"}
-    )
-
-    gold_events = gold_events.sort_values(
-        "event_date"
-    ).reset_index(drop=True)
-
-    gold_events["prev_event_date"] = (
-        gold_events["event_date"].shift(1)
-    )
-
-    gold_events["days_since_prev"] = (
-        gold_events["event_date"]
-        - gold_events["prev_event_date"]
-    ).dt.days
-
-    gold_events = gold_events[
-        gold_events["days_since_prev"].isna()
-        | (gold_events["days_since_prev"] > COOLDOWN_DAYS)
-    ].copy()
-
-    last_signal_date = None
-    days_since_last_signal = None
-
-    if not gold_events.empty:
-        last_signal_date = gold_events["event_date"].max()
-        days_since_last_signal = (
-            latest_gold_date - last_signal_date
-        ).days
-
-    signal_active = latest_gold_change >= THRESHOLD
-
-    cooldown_active = (
-        days_since_last_signal is not None
-        and days_since_last_signal <= COOLDOWN_DAYS
-    )
-
-    # ======================
-    # SIGNAL STATUS
-    # ======================
-
-    st.subheader("Gold Today")
-
-    gold_widget_df = gold_df.copy()
-    gold_widget_df = gold_widget_df.sort_values("driver_date").reset_index(drop=True)
-
-    gold_widget_df["prev_value"] = gold_widget_df["value"].shift(1)
-    gold_widget_df["today_change_pct"] = (
-        (gold_widget_df["value"] - gold_widget_df["prev_value"])
-        / gold_widget_df["prev_value"]
-        * 100
-    )
-
-    gold_widget_df["gold_10d_change_pct"] = (
-        gold_widget_df["value"].pct_change(LOOKBACK) * 100
-    )
-
-    latest_gold_widget = gold_widget_df.dropna(
-        subset=["value", "today_change_pct", "gold_10d_change_pct"]
-    ).tail(1)
-
-    if latest_gold_widget.empty:
-        st.warning("Data GOLD belum cukup untuk widget Gold Today.")
-    else:
-        gold_row = latest_gold_widget.iloc[0]
-
-        gold_today_date = gold_row["driver_date"]
-        gold_today_value = gold_row["value"]
-        gold_today_change_pct = gold_row["today_change_pct"]
-        gold_10d_change_pct = gold_row["gold_10d_change_pct"]
-
-        signal_status = (
-        "ACTIVE"
-        if gold_10d_change_pct >= THRESHOLD
-        else "WAIT"
-        )
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        col1.metric(
-            "Gold Date",
-            gold_today_date.strftime("%Y-%m-%d")
-        )
-
-        col2.metric(
-            "Gold Price",
-            f"{gold_today_value:,.2f}"
-        )
-
-        col3.metric(
-            "Gold Today",
-            f"{gold_today_change_pct:.2f}%"
-        )
-
-        col4.metric(
-            "Gold 10D",
-            f"{gold_10d_change_pct:.2f}%",
-            delta=signal_status
-        )
-
-    if signal_active:
-        st.success(
-            f"ACTIVE SIGNAL: GOLD naik {latest_gold_change:.2f}% "
-            f"dalam {LOOKBACK} hari. Watch {TARGET_TICKER}."
-        )
-    else:
-        st.info(
-            f"WAIT: GOLD baru naik {latest_gold_change:.2f}% "
-            f"dalam {LOOKBACK} hari. Belum tembus threshold +{THRESHOLD}%."
-        )
-
-    if last_signal_date is not None:
-        st.caption(
-            f"Last valid GOLD signal: {last_signal_date.strftime('%Y-%m-%d')} "
-            f"({days_since_last_signal} hari lalu)"
-        )
-
-        if cooldown_active:
-            st.warning(
-                f"Cooldown aktif: last signal masih dalam "
-                f"{COOLDOWN_DAYS} hari."
-            )
-        else:
-            st.success("Cooldown clear: boleh tunggu signal baru.")
-
-    # ======================
-    # GOLD DRIVEN WATCHLIST
-    # ======================
-
-    def show_gold_driven_watchlist(engine):
-        st.subheader("Gold Driven Stock Watchlist")
-
-        gold_watchlist = [
+DRIVER_CONFIG = {
+    "Gold Driver": {
+        "driver_group": "GOLD",
+        "driver_symbol": "GOLD",
+        "title": "Gold Driver",
+        "description": "Gold momentum signal untuk saham terkait emas Indonesia.",
+        "source_label": "Gold price driver from data/driver_prices.csv",
+        # Research universe. EMAS.JK is included as study candidate / not yet validated.
+        "tickers": [
             "HRTA.JK",
+            "ANTM.JK",
             "MDKA.JK",
             "BRMS.JK",
-            "ANTM.JK",
             "EMAS.JK",
-        ]
-
-        watchlist_price_df = pd.read_sql(
-            """
-            SELECT
-                trade_date,
-                ticker,
-                close_price,
-                volume
-            FROM daily_prices
-            WHERE ticker IN (?, ?, ?, ?, ?)
-            ORDER BY ticker, DATE(trade_date)
-            """,
-            engine,
-            params=tuple(gold_watchlist)
-        )
-
-        if watchlist_price_df.empty:
-            st.warning("Belum ada data harga untuk gold watchlist.")
-            return
-
-        watchlist_price_df["trade_date"] = pd.to_datetime(
-            watchlist_price_df["trade_date"],
-            format="mixed",
-            errors="coerce"
-        )
-
-        watchlist_price_df = watchlist_price_df.dropna(
-            subset=["trade_date", "close_price"]
-        ).copy()
-
-        watchlist_price_df = watchlist_price_df.sort_values(
-            ["ticker", "trade_date"]
-        ).reset_index(drop=True)
-
-        watchlist_price_df["prev_close"] = (
-            watchlist_price_df
-            .groupby("ticker")["close_price"]
-            .shift(1)
-        )
-
-        watchlist_price_df["prev_close_date"] = (
-            watchlist_price_df
-            .groupby("ticker")["trade_date"]
-            .shift(1)
-        )
-
-        watchlist_price_df["change_pct"] = (
-            (
-                watchlist_price_df["close_price"]
-                - watchlist_price_df["prev_close"]
-            )
-            / watchlist_price_df["prev_close"]
-            * 100
-        )
-
-        gold_watchlist_today = (
-            watchlist_price_df
-            .dropna(subset=["close_price"])
-            .groupby("ticker")
-            .tail(1)
-            .copy()
-        )
-
-        def stock_status(change_pct):
-            if pd.isna(change_pct):
-                return "No Data"
-            elif change_pct > 0:
-                return "Up"
-            elif change_pct < 0:
-                return "Down"
-            else:
-                return "Flat"
-
-        gold_watchlist_today["status"] = (
-            gold_watchlist_today["change_pct"]
-            .apply(stock_status)
-        )
-
-        gold_watchlist_today["role"] = gold_watchlist_today["ticker"].map({
+        ],
+        "roles": {
             "HRTA.JK": "Primary Target",
+            "ANTM.JK": "Cyclical Watchlist",
             "MDKA.JK": "Secondary Watchlist",
             "BRMS.JK": "High Beta Watchlist",
-            "ANTM.JK": "Cyclical Watchlist",
-            "EMAS.JK": "New Gold Watchlist",
-        })
+            "EMAS.JK": "Study Candidate / Not Validated",
+        },
+        "primary_ticker": "HRTA.JK",
+        "lookback_days": 10,
+        "threshold_pct": 5.0,
+        "hold_days": 10,
+        "cooldown_days": 20,
+        "rule_text": "GOLD naik >= +5% dalam 10 trading days | Entry next trading day | Hold 10D | Cooldown 20D",
+        "summary_source": "db",
+        "summary_table": "gold_beneficiaries_backtest_summary",
+        "yearly_source": "db",
+        "yearly_table": "gold_beneficiaries_year_by_year",
+        "trade_source": "db",
+        "trade_table": "gold_beneficiaries_backtest_trades",
+    },
 
-        gold_watchlist_today["last_close_date"] = (
-            gold_watchlist_today["trade_date"]
-            .dt.strftime("%Y-%m-%d")
+    "Coal Driver": {
+        "driver_group": "COAL",
+        "driver_symbol": "COAL",
+        "title": "Coal Driver",
+        "description": "Newcastle Coal momentum signal untuk saham coal Indonesia.",
+        "source_label": "Newcastle Coal Futures / NCFMc1 from data/driver_prices.csv",
+        # Research universe. BUMI.JK is included as study candidate / not yet validated.
+        "tickers": [
+            "ADRO.JK",
+            "PTBA.JK",
+            "ITMG.JK",
+            "HRUM.JK",
+            "BYAN.JK",
+            "BUMI.JK",
+        ],
+        "roles": {
+            "ADRO.JK": "Primary Target",
+            "PTBA.JK": "Secondary Candidate",
+            "ITMG.JK": "High Return / Higher Risk",
+            "HRUM.JK": "Aggressive Watchlist",
+            "BYAN.JK": "Speculative Watchlist",
+            "BUMI.JK": "Study Candidate / Not Validated",
+        },
+        "primary_ticker": "ADRO.JK",
+        "lookback_days": 10,
+        "threshold_pct": 10.0,
+        "hold_days": 10,
+        "cooldown_days": 30,
+        "rule_text": "COAL naik >= +10% dalam 10 trading days | Entry next trading day | Hold 10D | Cooldown 30D",
+        "summary_source": "csv",
+        "summary_file": PROCESSED_DIR / "coal_backtest_results.csv",
+        "yearly_source": "computed_from_trades",
+        "trade_source": "csv",
+        "trade_file": PROCESSED_DIR / "coal_trade_details.csv",
+    },
+
+    "Nickel Driver": {
+        "driver_group": "NICKEL",
+        "driver_symbol": "NICKEL",
+        "title": "Nickel Driver",
+        "description": "Nickel momentum signal untuk saham nickel Indonesia. Research source memakai Nickel Futures Investing; production proxy memakai ^SPGSIK dari Yahoo Finance.",
+        "source_label": "S&P GSCI Nickel Index (^SPGSIK) from data/driver_prices.csv | validated vs Investing Nickel Futures: 60D corr 0.9983",
+        "tickers": [
+            "INCO.JK",
+            "ANTM.JK",
+            "NCKL.JK",
+            "MBMA.JK",
+        ],
+        "roles": {
+            "INCO.JK": "Primary Target / Nickel Champion",
+            "ANTM.JK": "Secondary Watchlist / Outlier Risk",
+            "NCKL.JK": "Low Sample / Study Candidate",
+            "MBMA.JK": "Low Sample / Study Candidate",
+        },
+        "primary_ticker": "INCO.JK",
+        "lookback_days": 60,
+        "threshold_pct": 9.0,
+        "hold_days": 60,
+        "cooldown_days": 60,
+        "rule_text": "NICKEL naik >= +9% dalam 60 trading days | Entry next trading day | Hold 60D | Cooldown 60D",
+        "summary_source": "csv",
+        "summary_file": PROCESSED_DIR / "nickel_backtest_summary.csv",
+        "yearly_source": "computed_from_trades",
+        "trade_source": "csv",
+        "trade_file": PROCESSED_DIR / "nickel_trade_details.csv",
+    },
+}
+
+
+# ======================
+# GENERAL HELPERS
+# ======================
+
+def normalize_ticker(value):
+    value = str(value).strip().upper()
+    if value and not value.endswith(".JK"):
+        value = f"{value}.JK"
+    return value
+
+
+def safe_to_datetime(series):
+    return pd.to_datetime(series, format="mixed", errors="coerce")
+
+
+def safe_numeric(series):
+    return pd.to_numeric(series, errors="coerce")
+
+
+def format_date(value):
+    if pd.isna(value):
+        return "-"
+    return pd.to_datetime(value).strftime("%Y-%m-%d")
+
+
+def format_pct(value):
+    if pd.isna(value):
+        return "-"
+    return f"{float(value):.2f}%"
+
+
+def format_number(value):
+    if pd.isna(value):
+        return "-"
+    return f"{float(value):,.2f}"
+
+
+def table_exists(table_name):
+    if not Path(DB_PATH).exists():
+        return False
+
+    with sqlite3.connect(DB_PATH) as con:
+        result = pd.read_sql(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = ?
+            """,
+            con,
+            params=(table_name,),
         )
 
-        gold_watchlist_today["prev_close_date"] = (
-            gold_watchlist_today["prev_close_date"]
-            .dt.strftime("%Y-%m-%d")
+    return not result.empty
+
+
+def read_sql_table(table_name):
+    if not table_exists(table_name):
+        return pd.DataFrame()
+
+    with sqlite3.connect(DB_PATH) as con:
+        return pd.read_sql(f"SELECT * FROM {table_name}", con)
+
+
+# ======================
+# TRADE DATE / SCHEDULE HELPERS
+# ======================
+
+@st.cache_data
+def load_ticker_trade_calendar(ticker):
+    """
+    Actual trading calendar from daily_prices only.
+
+    No manual holiday assumption. If a date has no stock price row, it is treated as
+    non-trading / unavailable. This makes countdown follow real available data.
+    """
+    ticker = normalize_ticker(ticker)
+
+    if not Path(DB_PATH).exists():
+        return []
+
+    with sqlite3.connect(DB_PATH) as con:
+        df = pd.read_sql(
+            """
+            SELECT trade_date
+            FROM daily_prices
+            WHERE ticker = ?
+            ORDER BY DATE(trade_date)
+            """,
+            con,
+            params=(ticker,),
         )
 
-        gold_watchlist_today["change_pct"] = (
-            gold_watchlist_today["change_pct"]
-            .round(2)
-        )
+    if df.empty:
+        return []
 
-        gold_watchlist_today = gold_watchlist_today[
-            [
-                "ticker",
-                "role",
-                "last_close_date",
-                "close_price",
-                "prev_close_date",
-                "prev_close",
-                "change_pct",
-                "volume",
-                "status",
-            ]
-        ].copy()
+    dates = safe_to_datetime(df["trade_date"]).dropna().dt.normalize().drop_duplicates()
+    return dates.tolist()
 
-        gold_watchlist_today = gold_watchlist_today.rename(
-            columns={
-                "close_price": "last_close",
-            }
-        )
 
-        st.dataframe(
-            gold_watchlist_today,
-            use_container_width=True
-        )
+def next_actual_trading_day_after(trigger_date, calendar_dates):
+    """Return next available stock-price date after driver trigger date."""
+    if pd.isna(trigger_date):
+        return pd.NaT
 
-    show_gold_driven_watchlist(engine)
-    
-    # ======================
-    # RULE CARD
-    # ======================
+    trigger = pd.to_datetime(trigger_date).normalize()
+    future_dates = [d for d in calendar_dates if d > trigger]
 
-    st.subheader("Final Rule")
+    if not future_dates:
+        return pd.NaT
 
-    rule_df = pd.DataFrame([
-        {
-            "item": "Driver",
-            "value": DRIVER
-        },
-        {
-            "item": "Trigger",
-            "value": f"{DRIVER} >= +{THRESHOLD}% dalam {LOOKBACK} hari"
-        },
-        {
-            "item": "Cooldown",
-            "value": f"{COOLDOWN_DAYS} hari"
-        },
-        {
-            "item": "Holding Period",
-            "value": f"{HOLD_DAYS} trading days"
-        },
-        {
-            "item": "Primary Target",
-            "value": TARGET_TICKER
-        },
-        {
-            "item": "Optional Watchlist",
-            "value": "MDKA.JK, BRMS.JK, ANTM.JK"
+    return future_dates[0]
+
+
+def count_available_trading_days_from_entry(entry_date, ref_date, calendar_dates):
+    """
+    Count actual available stock rows from entry date through latest stock date.
+
+    User-facing operational convention:
+    - entry date is counted as day 1
+    - example: entry 2026-06-05, data exists for 2026-06-05 and 2026-06-08
+      => elapsed = 2, countdown for hold 10 = 8
+    """
+    if pd.isna(entry_date) or pd.isna(ref_date):
+        return 0
+
+    entry = pd.to_datetime(entry_date).normalize()
+    ref = pd.to_datetime(ref_date).normalize()
+
+    if ref < entry:
+        return 0
+
+    return int(sum(entry <= d <= ref for d in calendar_dates))
+
+
+def nth_available_trading_day_from_entry(entry_date, hold_days, calendar_dates):
+    """
+    Return the actual sell date only when the hold window already exists in data.
+    Entry date is day 1, so sell date is the hold_days-th available stock row.
+    """
+    if pd.isna(entry_date):
+        return pd.NaT
+
+    entry = pd.to_datetime(entry_date).normalize()
+    dates = [d for d in calendar_dates if d >= entry]
+
+    if len(dates) < hold_days:
+        return pd.NaT
+
+    return dates[hold_days - 1]
+
+
+def build_signal_trade_schedule(row, config):
+    status = str(row.get("signal_status", "")).upper()
+    hold_days = int(config.get("hold_days", 10))
+
+    if status not in ["ACTIVE_ACTIONABLE", "ACTIVE_BUT_COOLDOWN"]:
+        return {
+            "model_trigger_date": pd.NaT,
+            "model_entry_date": pd.NaT,
+            "model_sell_date": pd.NaT,
+            "actual_trading_days_elapsed": 0,
+            "sell_countdown_trading_days": None,
+            "trade_phase": "NO_ACTIVE_TRADE",
         }
-    ])
 
-    st.dataframe(
-        rule_df,
-        use_container_width=True
-    )
-
-    # ======================
-    # LOAD BACKTEST RESULT
-    # ======================
-
-    try:
-        summary_df = pd.read_sql(
-            """
-            SELECT *
-            FROM gold_beneficiaries_backtest_summary
-            WHERE ticker = 'HRTA.JK'
-            """,
-            engine
-        )
-
-        yearly_df = pd.read_sql(
-            """
-            SELECT *
-            FROM gold_beneficiaries_year_by_year
-            WHERE ticker = 'HRTA.JK'
-            ORDER BY year
-            """,
-            engine
-        )
-
-        trade_df = pd.read_sql(
-            """
-            SELECT *
-            FROM gold_beneficiaries_backtest_trades
-            WHERE ticker = 'HRTA.JK'
-            ORDER BY buy_date
-            """,
-            engine
-        )
-
-    except Exception as e:
-        st.error(
-            "Backtest table belum tersedia. "
-            "Jalankan dulu backtest_gold.py."
-        )
-        st.code(str(e))
-        st.stop()
-
-    if summary_df.empty:
-        st.warning(
-            "Data summary HRTA belum tersedia di "
-            "gold_beneficiaries_backtest_summary."
-        )
-        st.stop()
-
-    summary_row = summary_df.iloc[0]
-
-    # ======================
-    # HRTA PERFORMANCE
-    # ======================
-
-    st.subheader("HRTA Historical Performance")
-
-    perf1, perf2, perf3, perf4 = st.columns(4)
-
-    perf1.metric(
-        "Compound Return",
-        f"{summary_row['compound_return_pct']:.2f}%"
-    )
-
-    perf2.metric(
-        "Win Rate",
-        f"{summary_row['win_rate_pct']:.2f}%"
-    )
-
-    perf3.metric(
-        "Profit Factor",
-        f"{summary_row['profit_factor']:.2f}"
-    )
-
-    perf4.metric(
-        "Total Trades",
-        int(summary_row["total_trades"])
-    )
-
-    perf5, perf6, perf7, perf8 = st.columns(4)
-
-    perf5.metric(
-        "Avg Return",
-        f"{summary_row['avg_return_pct']:.2f}%"
-    )
-
-    perf6.metric(
-        "Median Return",
-        f"{summary_row['median_return_pct']:.2f}%"
-    )
-
-    perf7.metric(
-        "Best Trade",
-        f"{summary_row['best_return_pct']:.2f}%"
-    )
-
-    perf8.metric(
-        "Worst Trade",
-        f"{summary_row['worst_return_pct']:.2f}%"
-    )
-
-    # ======================
-    # YEARLY ATTRIBUTION
-    # ======================
-
-    st.subheader("HRTA Year-by-Year Attribution")
-
-    if yearly_df.empty:
-        st.warning("Yearly attribution HRTA belum tersedia.")
+    # For a fresh actionable signal, latest driver date is the trigger.
+    # For cooldown / active trade, last_signal_date is the first trigger date.
+    if status == "ACTIVE_ACTIONABLE":
+        trigger_date = row.get("driver_latest_date")
     else:
-        st.dataframe(
-            yearly_df,
-            use_container_width=True
-        )
+        trigger_date = row.get("last_signal_date")
 
-        fig_yearly = go.Figure()
+    if pd.isna(trigger_date):
+        return {
+            "model_trigger_date": pd.NaT,
+            "model_entry_date": pd.NaT,
+            "model_sell_date": pd.NaT,
+            "actual_trading_days_elapsed": 0,
+            "sell_countdown_trading_days": None,
+            "trade_phase": "NO_TRIGGER_DATE",
+        }
 
-        fig_yearly.add_trace(
-            go.Bar(
-                x=yearly_df["year"],
-                y=yearly_df["annual_return_pct"],
-                name="Annual Return %"
-            )
-        )
+    ticker = str(row.get("target_ticker", config.get("primary_ticker"))).upper().strip()
+    calendar_dates = load_ticker_trade_calendar(ticker)
 
-        fig_yearly.update_layout(
-            title="HRTA Annual Return Attribution",
-            xaxis_title="Year",
-            yaxis_title="Annual Return %",
-            height=450
-        )
+    entry_date = next_actual_trading_day_after(trigger_date, calendar_dates)
 
-        st.plotly_chart(
-            fig_yearly,
-            use_container_width=True
-        )
+    ref_date = row.get("stock_latest_date")
+    if pd.isna(ref_date) and calendar_dates:
+        ref_date = max(calendar_dates)
+    elif not pd.isna(ref_date):
+        ref_date = pd.to_datetime(ref_date).normalize()
 
-    # ======================
-    # TRADE DETAIL
-    # ======================
+    elapsed = count_available_trading_days_from_entry(entry_date, ref_date, calendar_dates)
+    countdown = max(hold_days - elapsed, 0)
 
-    st.subheader("HRTA Trade Detail")
+    # Only show actual sell date once the 10th available stock-price row exists.
+    sell_date = nth_available_trading_day_from_entry(entry_date, hold_days, calendar_dates)
 
-    if trade_df.empty:
-        st.warning("Trade detail HRTA belum tersedia.")
+    if pd.isna(entry_date):
+        trade_phase = "WAITING_FOR_ENTRY_DATA"
+    elif elapsed == 0:
+        trade_phase = "ENTRY_PENDING"
+    elif countdown > 0:
+        trade_phase = "IN_HOLD"
     else:
-        show_cols = [
-            "event_date",
-            "driver_change_pct",
-            "buy_date",
-            "sell_date",
-            "buy_price",
-            "sell_price",
-            "return_pct",
-            "profit_rp",
-            "ending_value"
-        ]
+        trade_phase = "SELL_DUE_OR_PAST"
 
-        show_cols = [
-            c for c in show_cols
-            if c in trade_df.columns
-        ]
+    return {
+        "model_trigger_date": trigger_date,
+        "model_entry_date": entry_date,
+        "model_sell_date": sell_date,
+        "actual_trading_days_elapsed": elapsed,
+        "sell_countdown_trading_days": countdown,
+        "trade_phase": trade_phase,
+    }
 
-        st.dataframe(
-            trade_df[show_cols],
-            use_container_width=True
-        )
-
-    st.stop()
-    
-# ======================
-# ADD STOCK NAME
-# ======================
-
-master_df = pd.read_csv("data/stock_master.csv")
-master_df.columns = master_df.columns.str.strip().str.lower()
-
-if "ticker" in master_df.columns:
-    master_df["ticker"] = master_df["ticker"].astype(str).str.strip()
-    master_df["ticker"] = master_df["ticker"].apply(
-        lambda x: x if x.endswith(".JK") else x + ".JK"
-    )
-
-    latest_df = latest_df.merge(
-        master_df,
-        on="ticker",
-        how="left"
-    )
 
 # ======================
-# DRIVER SCORE ENGINE
+# DATA LOADERS
 # ======================
 
-mapping_df = pd.read_csv("data/stock_mapping.csv")
-driver_df = pd.read_csv("data/driver_scores.csv")
+@st.cache_data
+def load_driver_prices():
+    path = Path(DRIVER_CSV_PATH)
 
-mapping_df.columns = mapping_df.columns.str.strip().str.lower()
-driver_df.columns = driver_df.columns.str.strip().str.lower()
+    if not path.exists():
+        return pd.DataFrame(columns=["driver", "driver_date", "value"])
 
-mapping_df["ticker"] = mapping_df["ticker"].astype(str).str.strip()
-mapping_df["ticker"] = mapping_df["ticker"].apply(
-    lambda x: x if x.endswith(".JK") else x + ".JK"
-)
+    df = pd.read_csv(path)
+    df.columns = df.columns.str.strip().str.lower()
 
-mapping_df["driver"] = mapping_df["driver"].astype(str).str.strip().str.upper()
-mapping_df["impact_direction"] = mapping_df["impact_direction"].astype(str).str.strip().str.upper()
-mapping_df["weight"] = pd.to_numeric(mapping_df["weight"], errors="coerce").fillna(0)
+    required_cols = {"driver", "driver_date", "value"}
+    missing_cols = required_cols - set(df.columns)
 
-driver_df["driver"] = driver_df["driver"].astype(str).str.strip().str.upper()
-driver_df["score"] = pd.to_numeric(driver_df["score"], errors="coerce").fillna(0)
+    if missing_cols:
+        st.error(f"Kolom driver_prices.csv kurang: {sorted(missing_cols)}")
+        return pd.DataFrame(columns=["driver", "driver_date", "value"])
 
-# ======================
-# DRIVER STATUS LABEL
-# ======================
+    df["driver"] = df["driver"].astype(str).str.upper().str.strip()
+    df["driver_date"] = safe_to_datetime(df["driver_date"])
+    df["value"] = safe_numeric(df["value"])
 
-def driver_status(score):
+    df = df.dropna(subset=["driver", "driver_date", "value"])
+    df = df.sort_values(["driver", "driver_date"]).reset_index(drop=True)
 
-    if score >= 1:
-        return "Bullish"
-
-    elif score <= -1:
-        return "Bearish"
-
-    else:
-        return "Neutral"
+    return df
 
 
-driver_df["status"] = driver_df["score"].apply(driver_status)
+@st.cache_data
+def load_stock_prices(tickers, start_date, end_date):
+    tickers = tuple(normalize_ticker(t) for t in tickers)
 
-score_df = mapping_df.merge(
-    driver_df,
-    on="driver",
-    how="left"
-)
+    if not Path(DB_PATH).exists() or not tickers:
+        return pd.DataFrame()
 
-score_df["score"] = score_df["score"].fillna(0)
+    placeholders = ",".join(["?"] * len(tickers))
 
-score_df["direction_multiplier"] = score_df["impact_direction"].map({
-    "POSITIVE": 1,
-    "NEGATIVE": -1
-}).fillna(0)
+    query = f"""
+        SELECT *
+        FROM daily_prices
+        WHERE ticker IN ({placeholders})
+          AND DATE(trade_date) BETWEEN DATE(?) AND DATE(?)
+        ORDER BY ticker, DATE(trade_date)
+    """
 
-score_df["contribution"] = (
-    score_df["weight"]
-    * score_df["direction_multiplier"]
-    * score_df["score"]
-)
+    params = (*tickers, str(start_date), str(end_date))
 
-stock_score = (
-    score_df
-    .groupby("ticker")["contribution"]
-    .sum()
-    .reset_index()
-    .rename(columns={"contribution": "driver_score"})
-)
+    with sqlite3.connect(DB_PATH) as con:
+        df = pd.read_sql(query, con, params=params)
 
-latest_df = latest_df.merge(
-    stock_score,
-    on="ticker",
-    how="left"
-)
+    if df.empty:
+        return df
 
-latest_df["driver_score"] = latest_df["driver_score"].fillna(0)
+    df["ticker"] = df["ticker"].astype(str).str.upper().str.strip()
+    df["trade_date"] = safe_to_datetime(df["trade_date"])
 
-# ======================
-# UI FUNCTIONS
-# ======================
-
-def show_market_breadth(df):
-
-    if "avg_volume" in df.columns:
-        df["is_volume_spike"] = (
-            df["volume"] > df["avg_volume"] * 2
-        )
-    else:
-        df["is_volume_spike"] = False
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric(
-        "Bullish",
-        int(df["is_bullish"].sum())
-    )
-
-    col2.metric(
-        "Oversold",
-        int(df["is_oversold"].sum())
-    )
-
-    col3.metric(
-        "Golden Cross",
-        int(df["is_golden_cross"].sum())
-    )
-
-    col4.metric(
-        "Volume Spike",
-        int(df["is_volume_spike"].sum())
-    )
-
-def show_screener(df):
-
-    screened_df = df.copy()
-
-    if screener == "RSI Oversold":
-
-        screened_df = screened_df[
-            screened_df["is_oversold"] == 1
-        ]
-
-    elif screener == "Bullish Trend":
-
-        screened_df = screened_df[
-            screened_df["is_bullish"] == 1
-        ]
-
-    elif screener == "Golden Cross":
-
-        screened_df = screened_df[
-            screened_df["is_golden_cross"] == 1
-        ]
-
-    elif screener == "Volume Spike":
-
-        screened_df = screened_df[
-            screened_df["is_volume_spike"] == 1
-        ]
-
-    show_cols = [
-        "ticker",
-        "name",
-        "stock_name",
-        "company_name",
-        "sector",
-        "trade_date",
+    numeric_cols = [
+        "open_price",
+        "high_price",
+        "low_price",
         "close_price",
         "volume",
         "ma20",
         "ma50",
         "rsi",
         "ma_distance",
-        "driver_score"
     ]
 
-    available_cols = [
-        c for c in show_cols
-        if c in screened_df.columns
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = safe_numeric(df[col])
+
+    df = df.dropna(subset=["ticker", "trade_date", "close_price"])
+    df = df.sort_values(["ticker", "trade_date"]).reset_index(drop=True)
+
+    return df
+
+
+@st.cache_data
+def load_latest_stock_rows(tickers):
+    tickers = tuple(normalize_ticker(t) for t in tickers)
+
+    if not Path(DB_PATH).exists() or not tickers:
+        return pd.DataFrame()
+
+    placeholders = ",".join(["?"] * len(tickers))
+
+    query = f"""
+        SELECT trade_date, ticker, close_price, volume
+        FROM daily_prices
+        WHERE ticker IN ({placeholders})
+        ORDER BY ticker, DATE(trade_date)
+    """
+
+    with sqlite3.connect(DB_PATH) as con:
+        df = pd.read_sql(query, con, params=tickers)
+
+    if df.empty:
+        return df
+
+    df["ticker"] = df["ticker"].astype(str).str.upper().str.strip()
+    df["trade_date"] = safe_to_datetime(df["trade_date"])
+    df["close_price"] = safe_numeric(df["close_price"])
+    df["volume"] = safe_numeric(df["volume"])
+
+    df = df.dropna(subset=["ticker", "trade_date", "close_price"])
+    df = df.sort_values(["ticker", "trade_date"]).reset_index(drop=True)
+
+    df["prev_close"] = df.groupby("ticker")["close_price"].shift(1)
+    df["prev_close_date"] = df.groupby("ticker")["trade_date"].shift(1)
+    df["change_pct"] = (df["close_price"] / df["prev_close"] - 1) * 100
+
+    latest = df.groupby("ticker").tail(1).copy()
+
+    return latest
+
+
+@st.cache_data
+def load_latest_driver_signals():
+    if not LATEST_SIGNAL_PATH.exists():
+        return pd.DataFrame()
+
+    df = pd.read_csv(LATEST_SIGNAL_PATH)
+    df.columns = df.columns.str.strip()
+
+    date_cols = [
+        "driver_latest_date",
+        "driver_prev_date",
+        "last_signal_date",
+        "stock_latest_date",
     ]
 
-    with st.expander(
-        "Screener Result",
-        expanded=False
-    ):
-
-        st.dataframe(
-            screened_df[available_cols],
-            use_container_width=True
-        )
-
-def show_driver_ranking(df):
-
-    driver_rank = df.sort_values(
-        "driver_score",
-        ascending=False
-    )
-
-    ranking_cols = [
-        "ticker",
-        "name",
-        "stock_name",
-        "company_name",
-        "sector",
-        "close_price",
-        "rsi",
-        "ma_distance",
-        "driver_score"
-    ]
-
-    ranking_cols = [
-        c for c in ranking_cols
-        if c in driver_rank.columns
-    ]
-
-    with st.expander(
-        "Driver Score Ranking",
-        expanded=False
-    ):
-
-        st.dataframe(
-            driver_rank[ranking_cols],
-            use_container_width=True
-        )
-
-def show_momentum(df):
-
-    momentum_df = df.copy()
-
-    momentum_df = momentum_df.sort_values(
-        "ma_distance",
-        ascending=False
-    )
-
-    momentum_cols = [
-        "ticker",
-        "name",
-        "stock_name",
-        "company_name",
-        "sector",
-        "close_price",
-        "ma20",
-        "ma50",
-        "rsi",
-        "ma_distance",
-        "driver_score"
-    ]
-
-    momentum_cols = [
-        c for c in momentum_cols
-        if c in momentum_df.columns
-    ]
-
-    with st.expander(
-        "Momentum Ranking",
-        expanded=False
-    ):
-
-        st.dataframe(
-            momentum_df[momentum_cols].head(10),
-            use_container_width=True
-        )
-
-def show_price_chart(price_df, selected_ticker):
-
-    st.subheader(f"Price Chart - {selected_ticker}")
-
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Candlestick(
-            x=price_df["trade_date"],
-            open=price_df["open_price"],
-            high=price_df["high_price"],
-            low=price_df["low_price"],
-            close=price_df["close_price"],
-            name="Price",
-            increasing_line_color="#59CD90",
-            decreasing_line_color="#EE6352"
-        )
-    )
-
-    fig.add_trace(
-        go.Scatter(
-            x=price_df["trade_date"],
-            y=price_df["ma20"],
-            mode="lines",
-            name="MA20",
-            line=dict(color="#3FA7D6")
-        )
-    )
-
-    fig.add_trace(
-        go.Scatter(
-            x=price_df["trade_date"],
-            y=price_df["ma50"],
-            mode="lines",
-            name="MA50",
-            line=dict(color="#FAC05E")
-        )
-    )
-
-    fig.update_layout(
-        height=600,
-        xaxis_rangeslider_visible=False
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-def show_driver_breakdown(mapping_df, driver_df, selected_ticker):
-
-    selected_mapping = mapping_df[
-        mapping_df["ticker"] == selected_ticker
-    ].copy()
-
-    selected_mapping = selected_mapping.merge(
-        driver_df,
-        on="driver",
-        how="left"
-    )
-
-    selected_mapping["score"] = (
-        selected_mapping["score"]
-        .fillna(0)
-    )
-
-    selected_mapping["direction_multiplier"] = (
-        selected_mapping["impact_direction"]
-        .map({
-            "POSITIVE": 1,
-            "NEGATIVE": -1
-        })
-        .fillna(0)
-    )
-
-    selected_mapping["contribution"] = (
-        selected_mapping["weight"]
-        * selected_mapping["direction_multiplier"]
-        * selected_mapping["score"]
-    )
-
-    selected_mapping = selected_mapping.sort_values(
-        "contribution",
-        ascending=False
-    )
-
-    st.subheader(f"Driver Breakdown - {selected_ticker}")
-
-    breakdown_cols = [
-        "driver",
-        "impact_direction",
-        "weight",
-        "score",
-        "contribution"
-    ]
-
-    if selected_mapping.empty:
-
-        st.info("Belum ada mapping driver untuk saham ini.")
-
-    else:
-
-        total_driver_score = selected_mapping["contribution"].sum()
-
-        st.metric(
-            "Total Driver Score",
-            round(total_driver_score, 2)
-        )
-
-        st.dataframe(
-            selected_mapping[breakdown_cols],
-            use_container_width=True
-        )
-
-def show_sector_summary(df):
-
-    if "sector" not in df.columns:
-        return
-
-    sector_df = (
-        df
-        .groupby("sector")
-        .agg(
-            avg_rsi=("rsi", "mean"),
-            total_volume=("volume", "sum"),
-            bullish_count=("is_bullish", "sum"),
-            stock_count=("ticker", "count"),
-            avg_driver_score=("driver_score", "mean")
-        )
-        .reset_index()
-    )
-
-    sector_df["avg_rsi"] = sector_df["avg_rsi"].round(2)
-    sector_df["avg_driver_score"] = sector_df[
-        "avg_driver_score"
-    ].round(2)
-
-    with st.expander(
-        "Sector Summary",
-        expanded=False
-    ):
-
-        st.dataframe(
-            sector_df,
-            use_container_width=True
-        )
-
-def show_economic_drivers(driver_df):
-
-    with st.expander(
-        "Economic Drivers Today",
-        expanded=False
-    ):
-
-        st.dataframe(
-            driver_df[
-                [
-                    "driver",
-                    "score",
-                    "status"
-                ]
-            ].sort_values(
-                "score",
-                ascending=False
-            ),
-            use_container_width=True
-        )
-
-
-def show_top_beneficiaries(score_df, driver_df):
-
-    with st.expander(
-        "Top Beneficiaries per Driver",
-        expanded=False
-    ):
-
-        selected_driver = st.selectbox(
-            "Pilih Driver",
-            sorted(driver_df["driver"].dropna().unique())
-        )
-
-        beneficiary_df = score_df[
-            score_df["driver"] == selected_driver
-        ].copy()
-
-        beneficiary_df = beneficiary_df.sort_values(
-            "contribution",
-            ascending=False
-        )
-
-        beneficiary_cols = [
-            "ticker",
-            "impact_direction",
-            "weight",
-            "score",
-            "contribution"
-        ]
-
-        st.dataframe(
-            beneficiary_df[beneficiary_cols],
-            use_container_width=True
-        )
-
-
-def show_market_regime(
-    market_regime,
-    top_positive_drivers,
-    top_negative_drivers
-):
-
-    st.metric(
-        "Market Regime",
-        market_regime
-    )
-
-    with st.expander(
-        "Why This Regime?",
-        expanded=False
-    ):
-
-        st.write("### Top Positive Drivers")
-
-        st.dataframe(
-            top_positive_drivers[
-                [
-                    "driver",
-                    "score",
-                    "status"
-                ]
-            ],
-            use_container_width=True
-        )
-
-        st.write("### Top Negative Drivers")
-
-        st.dataframe(
-            top_negative_drivers[
-                [
-                    "driver",
-                    "score",
-                    "status"
-                ]
-            ],
-            use_container_width=True
-        )
-
-def show_regime_watchlist(df):
-
-    watchlist_df = df.copy()
-
-    watchlist_df["watchlist_score"] = (
-        watchlist_df["driver_score"] * 0.7
-        +
-        watchlist_df["ma_distance"] * 0.3
-    )
-
-    watchlist_df = watchlist_df.sort_values(
-        "watchlist_score",
-        ascending=False
-    )
-
-    cols = [
-        "ticker",
-        "sector",
-        "driver_score",
-        "ma_distance",
-        "watchlist_score"
-    ]
-
-    cols = [
-        c for c in cols
-        if c in watchlist_df.columns
-    ]
-
-    with st.expander(
-        "Regime Watchlist",
-        expanded=False
-    ):
-
-        st.dataframe(
-            watchlist_df[cols].head(10),
-            use_container_width=True
-        )
-
-def show_conviction_score(df):
-
-    conviction_df = df.copy()
-
-    conviction_df["momentum_score"] = (
-        conviction_df["ma_distance"] / 10
-    )
-
-    conviction_df["trend_score"] = conviction_df["is_bullish"].apply(
-        lambda x: 1 if x == 1 or x is True else -1
-    )
-
-    conviction_df["rsi_score"] = conviction_df["rsi"].apply(
-        lambda x: 1 if x < 70 else -1
-    )
-
-    conviction_df["conviction_score"] = (
-        conviction_df["driver_score"] * 0.40
-        +
-        conviction_df["momentum_score"] * 0.30
-        +
-        conviction_df["trend_score"] * 0.20
-        +
-        conviction_df["rsi_score"] * 0.10
-    )
-
-    conviction_df = conviction_df.sort_values(
-        "conviction_score",
-        ascending=False
-    )
-
-    cols = [
-        "ticker",
-        "sector",
-        "driver_score",
-        "ma_distance",
-        "rsi",
-        "momentum_score",
-        "trend_score",
-        "rsi_score",
-        "conviction_score"
-    ]
-
-    cols = [
-        c for c in cols
-        if c in conviction_df.columns
-    ]
-
-    with st.expander(
-        "Conviction Score Ranking",
-        expanded=False
-    ):
-
-        st.dataframe(
-            conviction_df[cols].head(10),
-            use_container_width=True
-        )
-
-def show_selected_stock_conviction(df, selected_ticker):
-
-    selected_df = df[
-        df["ticker"] == selected_ticker
-    ].copy()
-
-    if selected_df.empty:
-        return
-
-    row = selected_df.iloc[0]
-
-    momentum_score = row["ma_distance"] / 10
-
-    trend_score = (
-        1 if row["is_bullish"] == 1 or row["is_bullish"] is True
-        else -1
-    )
-
-    rsi_score = (
-        1 if row["rsi"] < 70
-        else -1
-    )
-
-    conviction_score = (
-        row["driver_score"] * 0.40
-        + momentum_score * 0.30
-        + trend_score * 0.20
-        + rsi_score * 0.10
-    )
-
-    breakdown_df = pd.DataFrame([
-        {
-            "component": "Driver Score",
-            "value": row["driver_score"],
-            "weight": 0.40,
-            "weighted_score": row["driver_score"] * 0.40
-        },
-        {
-            "component": "Momentum Score",
-            "value": momentum_score,
-            "weight": 0.30,
-            "weighted_score": momentum_score * 0.30
-        },
-        {
-            "component": "Trend Score",
-            "value": trend_score,
-            "weight": 0.20,
-            "weighted_score": trend_score * 0.20
-        },
-        {
-            "component": "RSI Score",
-            "value": rsi_score,
-            "weight": 0.10,
-            "weighted_score": rsi_score * 0.10
-        }
-    ])
-
-    with st.expander(
-        f"Conviction Breakdown - {selected_ticker}",
-        expanded=False
-    ):
-
-        st.metric(
-            "Conviction Score",
-            round(conviction_score, 2)
-        )
-
-        st.dataframe(
-            breakdown_df,
-            use_container_width=True
-        )
+    for col in date_cols:
+        if col in df.columns:
+            df[col] = safe_to_datetime(df[col])
+
+    if "driver_group" in df.columns:
+        df["driver_group"] = df["driver_group"].astype(str).str.upper().str.strip()
+
+    if "driver_symbol" in df.columns:
+        df["driver_symbol"] = df["driver_symbol"].astype(str).str.upper().str.strip()
+
+    if "target_ticker" in df.columns:
+        df["target_ticker"] = df["target_ticker"].astype(str).str.upper().str.strip()
+
+    return df
+
+
+@st.cache_data
+def load_summary(config):
+    if config.get("summary_source") == "db":
+        return read_sql_table(config.get("summary_table"))
+
+    if config.get("summary_source") == "csv":
+        path = Path(config.get("summary_file"))
+        if path.exists():
+            return pd.read_csv(path)
+
+    return pd.DataFrame()
+
+
+@st.cache_data
+def load_yearly(config):
+    if config.get("yearly_source") == "db":
+        return read_sql_table(config.get("yearly_table"))
+
+    return pd.DataFrame()
+
+
+@st.cache_data
+def load_trades(config):
+    if config.get("trade_source") == "db":
+        return read_sql_table(config.get("trade_table"))
+
+    if config.get("trade_source") == "csv":
+        path = Path(config.get("trade_file"))
+        if path.exists():
+            return pd.read_csv(path)
+
+    return pd.DataFrame()
+
+
+@st.cache_data
+def get_available_date_range(tickers):
+    tickers = tuple(normalize_ticker(t) for t in tickers)
+
+    if not Path(DB_PATH).exists() or not tickers:
+        today = pd.Timestamp.today().date()
+        return today, today
+
+    placeholders = ",".join(["?"] * len(tickers))
+
+    query = f"""
+        SELECT MIN(trade_date) AS min_date,
+               MAX(trade_date) AS max_date
+        FROM daily_prices
+        WHERE ticker IN ({placeholders})
+    """
+
+    with sqlite3.connect(DB_PATH) as con:
+        result = pd.read_sql(query, con, params=tickers)
+
+    min_date = safe_to_datetime(result["min_date"]).iloc[0]
+    max_date = safe_to_datetime(result["max_date"]).iloc[0]
+
+    if pd.isna(min_date) or pd.isna(max_date):
+        today = pd.Timestamp.today().date()
+        return today, today
+
+    return min_date.date(), max_date.date()
+
 
 # ======================
-# TITLE
+# DISPLAY HELPERS
 # ======================
 
-st.title("Indonesia Market Dashboard")
+def get_range_dates(range_option, max_date, page_key):
+    max_ts = pd.Timestamp(max_date)
 
-# ======================
-# ECONOMIC DRIVERS TODAY
-# ======================
+    if range_option == "1D":
+        return max_date, max_date
 
-show_economic_drivers(driver_df)
+    if range_option == "1W":
+        return (max_ts - pd.DateOffset(weeks=1)).date(), max_date
 
-# ======================
-# TOP BENEFICIARIES PER DRIVER
-# ======================
+    if range_option == "3M":
+        return (max_ts - pd.DateOffset(months=3)).date(), max_date
 
-show_top_beneficiaries(
-    score_df,
-    driver_df
-)
+    if range_option == "1Y":
+        return (max_ts - pd.DateOffset(years=1)).date(), max_date
 
-# ======================
-# MARKET REGIME
-# ======================
-
-commodity_drivers = [
-    "COAL",
-    "CPO",
-    "GOLD",
-    "NICKEL",
-    "OIL"
-]
-
-commodity_score = driver_df[
-    driver_df["driver"].isin(commodity_drivers)
-]["score"].mean()
-
-rate_score = driver_df[
-    driver_df["driver"] == "BI_RATE"
-]["score"].mean()
-
-currency_score = driver_df[
-    driver_df["driver"] == "USDIDR"
-]["score"].mean()
-
-if commodity_score >= 0.5:
-    market_regime = "Commodity Bullish"
-
-elif rate_score >= 0.5:
-    market_regime = "Rate Sensitive Bullish"
-
-elif currency_score <= -0.5:
-    market_regime = "Currency Pressure"
-
-else:
-    market_regime = "Neutral / Mixed"
-
-# ======================
-# MARKET REGIME REASONS
-# ======================
-
-top_positive_drivers = (
-    driver_df
-    .sort_values("score", ascending=False)
-    .head(3)
-)
-
-top_negative_drivers = (
-    driver_df
-    .sort_values("score", ascending=True)
-    .head(3)
-)
-show_market_regime(
-    market_regime,
-    top_positive_drivers,
-    top_negative_drivers
-)
-
-show_regime_watchlist(
-    latest_df
-)
-
-show_conviction_score(
-    latest_df
-)
-
-# ======================
-# SIDEBAR
-# ======================
-
-tickers = sorted(latest_df["ticker"].dropna().unique())
-
-selected_ticker = st.sidebar.selectbox(
-    "Pilih Saham",
-    tickers
-)
-
-show_selected_stock_conviction(
-    latest_df,
-    selected_ticker
-)
-
-screener = st.sidebar.selectbox(
-    "Screener",
-    [
-        "All",
-        "RSI Oversold",
-        "Bullish Trend",
-        "Golden Cross",
-        "Volume Spike"
-    ]
-)
-
-range_option = st.sidebar.radio(
-    "Range",
-    ["1D", "1W", "1M", "3M", "1Y", "Custom"],
-    horizontal=True
-)
-
-max_date = pd.read_sql(
-    "SELECT MAX(trade_date) AS max_date FROM daily_prices",
-    engine
-)["max_date"].iloc[0]
-
-max_date = pd.to_datetime(max_date).date()
-
-if range_option == "1D":
-    start_date = max_date
-    end_date = max_date
-
-elif range_option == "1W":
-    start_date = max_date - pd.Timedelta(days=7)
-    end_date = max_date
-
-elif range_option == "1M":
-    start_date = (
-        pd.Timestamp(max_date)
-        - pd.DateOffset(months=1)
-    ).date()
-    end_date = max_date
-
-elif range_option == "3M":
-    start_date = (
-        pd.Timestamp(max_date)
-        - pd.DateOffset(months=3)
-    ).date()
-    end_date = max_date
-
-elif range_option == "1Y":
-    start_date = (
-        pd.Timestamp(max_date)
-        - pd.DateOffset(years=1)
-    ).date()
-    end_date = max_date
-
-else:
     start_date = st.sidebar.date_input(
         "From",
-        value=(
-            pd.Timestamp(max_date)
-            - pd.DateOffset(months=3)
-        ).date()
+        value=(max_ts - pd.DateOffset(years=1)).date(),
+        key=f"{page_key}_custom_start",
     )
 
     end_date = st.sidebar.date_input(
         "To",
-        value=max_date
+        value=max_date,
+        key=f"{page_key}_custom_end",
     )
 
-# ======================
-# MARKET BREADTH
-# ======================
+    return start_date, end_date
 
-show_market_breadth(latest_df)
 
-# ======================
-# SCREENER TABLE
-# ======================
+def show_signal_status(config, driver_prices=None):
+    st.subheader("Signal Status")
 
-show_screener(latest_df)
+    latest_signals = load_latest_driver_signals()
 
-# ======================
-# DRIVER SCORE RANKING
-# ======================
+    if latest_signals.empty:
+        st.warning(
+            "File latest signal belum tersedia. Jalankan `python latest_driver_signals.py` dulu."
+        )
+        return
 
-show_driver_ranking(latest_df)
+    driver_group = config["driver_group"]
 
-# ======================
-# QUERY CHART
-# ======================
+    signal_df = latest_signals[
+        latest_signals["driver_group"].astype(str).str.upper() == driver_group
+    ].copy()
 
-price_df = pd.read_sql(
-    """
-    SELECT *
-    FROM daily_prices
-    WHERE ticker = ?
-      AND DATE(trade_date) BETWEEN DATE(?) AND DATE(?)
-    ORDER BY DATE(trade_date)
-    """,
-    engine,
-    params=(
-        selected_ticker,
-        str(start_date),
-        str(end_date)
+    if signal_df.empty:
+        st.warning(f"Belum ada latest signal untuk {driver_group}.")
+        return
+
+    row = signal_df.iloc[0].copy()
+
+    # Use cooldown-debounced valid signal history as the source of truth
+    # for the first trigger date. latest_driver_signals.csv can show raw
+    # threshold-hit dates during cooldown; those are not new valid events.
+    if driver_prices is not None and not driver_prices.empty:
+        valid_events = build_valid_signal_events(driver_prices, config)
+
+        if not valid_events.empty:
+            valid_events_for_calc = valid_events.copy()
+            valid_events_for_calc["signal_date_dt"] = safe_to_datetime(
+                valid_events_for_calc["signal_date"]
+            )
+
+            driver_latest_date = row.get("driver_latest_date")
+            if not pd.isna(driver_latest_date):
+                driver_latest_date = pd.to_datetime(driver_latest_date).normalize()
+                valid_events_for_calc = valid_events_for_calc[
+                    valid_events_for_calc["signal_date_dt"] <= driver_latest_date
+                ].copy()
+
+            if not valid_events_for_calc.empty:
+                latest_valid_event = valid_events_for_calc.sort_values(
+                    "signal_date_dt"
+                ).iloc[-1]
+
+                if str(row.get("signal_status", "")).upper() == "ACTIVE_BUT_COOLDOWN":
+                    row["last_signal_date"] = latest_valid_event["signal_date_dt"]
+                    row["last_signal_return_pct"] = latest_valid_event.get(
+                        "driver_return_pct"
+                    )
+
+    schedule = build_signal_trade_schedule(row, config)
+
+    # Keep the visible detail table aligned with the corrected row.
+    for base_key in ["last_signal_date", "last_signal_return_pct"]:
+        if base_key in signal_df.columns:
+            signal_df[base_key] = row.get(base_key)
+
+    for key, value in schedule.items():
+        signal_df[key] = value
+        row[key] = value
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "Driver Date",
+        format_date(row.get("driver_latest_date")),
     )
+
+    col2.metric(
+        f"{config['driver_symbol']} {config['lookback_days']}D",
+        format_pct(row.get("driver_return_pct")),
+    )
+
+    col3.metric(
+        "Threshold",
+        format_pct(row.get("threshold_pct")),
+    )
+
+    col4.metric(
+        "Status",
+        str(row.get("signal_status", "-")),
+    )
+
+    status = str(row.get("signal_status", "")).upper()
+
+    if status == "ACTIVE_ACTIONABLE":
+        st.success(
+            f"Signal aktif dan actionable untuk {row.get('target_ticker', config['primary_ticker'])}. "
+            f"Model entry: {format_date(row.get('model_entry_date'))}. "
+            f"Elapsed: {row.get('actual_trading_days_elapsed', '-')} trading days. "
+            f"Countdown to sell: {row.get('sell_countdown_trading_days', '-')} trading days."
+        )
+    elif status == "ACTIVE_BUT_COOLDOWN":
+        st.warning(
+            "Threshold hit, tapi masih dalam cooldown / active trade window. "
+            f"First trigger: {format_date(row.get('last_signal_date'))}. "
+            f"Model entry: {format_date(row.get('model_entry_date'))}. "
+            f"Elapsed: {row.get('actual_trading_days_elapsed', '-')} trading days. "
+            f"Sisa menuju sell: {row.get('sell_countdown_trading_days', '-')} trading days."
+        )
+    else:
+        st.info(f"Belum ada signal aktif untuk {driver_group}.")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Trigger", format_date(row.get("model_trigger_date")))
+    c2.metric("Entry", format_date(row.get("model_entry_date")))
+    c3.metric("Elapsed TD", row.get("actual_trading_days_elapsed", "-"))
+    c4.metric("Sell Countdown", row.get("sell_countdown_trading_days", "-"))
+    c5.metric("Sell Date", format_date(row.get("model_sell_date")))
+
+    detail_cols = [
+        "driver_group",
+        "driver_symbol",
+        "target_ticker",
+        "driver_latest_date",
+        "driver_return_pct",
+        "threshold_pct",
+        "threshold_hit",
+        "signal_status",
+        "model_trigger_date",
+        "model_entry_date",
+        "model_sell_date",
+        "actual_trading_days_elapsed",
+        "sell_countdown_trading_days",
+        "trade_phase",
+        "last_signal_date",
+        "last_signal_return_pct",
+        "cooldown_remaining_days",
+        "stock_latest_date",
+        "stock_latest_close",
+    ]
+
+    detail_cols = [c for c in detail_cols if c in signal_df.columns]
+
+    with st.expander("Signal Detail", expanded=False):
+        st.caption(
+            "Countdown memakai actual available trading rows di daily_prices. "
+            "Entry date dihitung sebagai day 1. Sell date baru terisi kalau row trading day ke-N sudah tersedia."
+        )
+        st.dataframe(signal_df[detail_cols], use_container_width=True, hide_index=True)
+
+def show_rule_card(config):
+    st.subheader("Final Rule")
+
+    rule_df = pd.DataFrame(
+        [
+            {"item": "Driver", "value": config["driver_symbol"]},
+            {"item": "Primary Target", "value": config["primary_ticker"]},
+            {
+                "item": "Trigger",
+                "value": f"{config['driver_symbol']} >= +{config['threshold_pct']}% dalam {config['lookback_days']} trading days",
+            },
+            {"item": "Entry", "value": "Next trading day setelah signal"},
+            {"item": "Holding Period", "value": f"{config['hold_days']} trading days"},
+            {"item": "Cooldown", "value": f"{config['cooldown_days']} trading days"},
+            {"item": "Source", "value": config["source_label"]},
+        ]
+    )
+
+    st.dataframe(rule_df, use_container_width=True, hide_index=True)
+    st.caption(config["rule_text"])
+
+
+def show_driver_today(config, driver_prices):
+    st.subheader(f"{config['driver_symbol']} Today")
+
+    driver_df = driver_prices[
+        driver_prices["driver"] == config["driver_symbol"]
+    ].copy()
+
+    if driver_df.empty:
+        st.warning(f"Belum ada data driver {config['driver_symbol']} di {DRIVER_CSV_PATH}.")
+        return
+
+    driver_df = driver_df.sort_values("driver_date").reset_index(drop=True)
+    lookback = config["lookback_days"]
+
+    driver_df["prev_value"] = driver_df["value"].shift(1)
+    driver_df["today_change_pct"] = (driver_df["value"] / driver_df["prev_value"] - 1) * 100
+    driver_df["lookback_change_pct"] = driver_df["value"].pct_change(lookback) * 100
+
+    latest = driver_df.dropna(subset=["value", "lookback_change_pct"]).tail(1)
+
+    if latest.empty:
+        st.warning(f"Data {config['driver_symbol']} belum cukup untuk hitung lookback.")
+        return
+
+    row = latest.iloc[0]
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Date", format_date(row["driver_date"]))
+    col2.metric("Value", format_number(row["value"]))
+    col3.metric("Daily Change", format_pct(row["today_change_pct"]))
+    col4.metric(f"{lookback}D Change", format_pct(row["lookback_change_pct"]))
+
+
+def show_watchlist(config):
+    st.subheader(f"{config['driver_symbol']} Related Watchlist")
+
+    latest = load_latest_stock_rows(tuple(config["tickers"]))
+
+    if latest.empty:
+        st.warning("Belum ada data harga untuk watchlist ini.")
+        return
+
+    latest["role"] = latest["ticker"].map(config.get("roles", {})).fillna("Watchlist")
+    latest["last_close_date"] = latest["trade_date"].dt.strftime("%Y-%m-%d")
+    latest["prev_close_date"] = latest["prev_close_date"].dt.strftime("%Y-%m-%d")
+    latest["change_pct"] = latest["change_pct"].round(2)
+
+    latest["status"] = latest["change_pct"].apply(
+        lambda x: "Up" if x > 0 else "Down" if x < 0 else "Flat"
+    )
+
+    show_cols = [
+        "ticker",
+        "role",
+        "last_close_date",
+        "close_price",
+        "prev_close_date",
+        "prev_close",
+        "change_pct",
+        "volume",
+        "status",
+    ]
+
+    show_cols = [c for c in show_cols if c in latest.columns]
+
+    st.dataframe(latest[show_cols], use_container_width=True, hide_index=True)
+
+
+def plot_driver_chart(config, driver_prices, start_date, end_date):
+    driver_df = driver_prices[
+        (driver_prices["driver"] == config["driver_symbol"])
+        & (driver_prices["driver_date"] >= pd.to_datetime(start_date))
+        & (driver_prices["driver_date"] <= pd.to_datetime(end_date))
+    ].copy()
+
+    st.subheader(f"{config['driver_symbol']} Driver Chart")
+
+    if driver_df.empty:
+        st.warning("Data driver kosong pada range ini.")
+        return
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter(
+            x=driver_df["driver_date"],
+            y=driver_df["value"],
+            mode="lines",
+            name=config["driver_symbol"],
+        )
+    )
+
+    fig.update_layout(
+        height=360,
+        xaxis_title="Date",
+        yaxis_title="Driver Price",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def plot_stock_chart(price_df, selected_ticker):
+    st.subheader(f"Price Chart - {selected_ticker}")
+
+    data = price_df[price_df["ticker"] == selected_ticker].copy()
+
+    if data.empty:
+        st.warning("Data harga kosong untuk ticker/range ini.")
+        return
+
+    fig = go.Figure()
+
+    candle_cols = {"open_price", "high_price", "low_price", "close_price"}
+
+    if candle_cols.issubset(data.columns):
+        fig.add_trace(
+            go.Candlestick(
+                x=data["trade_date"],
+                open=data["open_price"],
+                high=data["high_price"],
+                low=data["low_price"],
+                close=data["close_price"],
+                name="Price",
+                increasing_line_color="#59CD90",
+                decreasing_line_color="#EE6352",
+            )
+        )
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=data["trade_date"],
+                y=data["close_price"],
+                mode="lines",
+                name="Close Price",
+            )
+        )
+
+    if "ma20" in data.columns and data["ma20"].notna().any():
+        fig.add_trace(
+            go.Scatter(
+                x=data["trade_date"],
+                y=data["ma20"],
+                mode="lines",
+                name="MA20",
+                line=dict(color="#3FA7D6"),
+            )
+        )
+
+    if "ma50" in data.columns and data["ma50"].notna().any():
+        fig.add_trace(
+            go.Scatter(
+                x=data["trade_date"],
+                y=data["ma50"],
+                mode="lines",
+                name="MA50",
+                line=dict(color="#FAC05E"),
+            )
+        )
+
+    fig.update_layout(
+        height=560,
+        xaxis_rangeslider_visible=False,
+        xaxis_title="Date",
+        yaxis_title="Price",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def normalize_summary_for_display(summary):
+    if summary.empty:
+        return summary
+
+    df = summary.copy()
+
+    rename_map = {
+        "win_rate_pct": "win_rate",
+        "avg_return_pct": "avg_trade_return_pct",
+        "best_return_pct": "best_trade_pct",
+        "worst_return_pct": "worst_trade_pct",
+    }
+
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+
+    return df
+
+
+def show_backtest_summary(config, selected_ticker):
+    st.subheader("Backtest Summary")
+
+    summary = load_summary(config)
+
+    if summary.empty:
+        st.warning("Backtest summary belum tersedia.")
+        return pd.DataFrame()
+
+    summary = normalize_summary_for_display(summary)
+
+    if "ticker" in summary.columns:
+        summary["ticker"] = summary["ticker"].astype(str).str.upper().str.strip()
+        summary = summary[summary["ticker"].isin(config["tickers"])].copy()
+
+    if summary.empty:
+        st.warning("Backtest summary kosong untuk driver ini.")
+        return summary
+
+    sort_cols = [c for c in ["score", "profit_factor", "compound_return_pct"] if c in summary.columns]
+    if sort_cols:
+        summary = summary.sort_values(sort_cols, ascending=False)
+
+    metric_row = None
+
+    if "ticker" in summary.columns:
+        selected_rows = summary[summary["ticker"] == selected_ticker].copy()
+        if not selected_rows.empty:
+            metric_row = selected_rows.iloc[0]
+        else:
+            st.info(
+                f"{selected_ticker} masih study candidate / belum ada hasil backtest valid di file summary saat ini."
+            )
+
+    if metric_row is None:
+        metric_row = summary.iloc[0]
+
+    m1, m2, m3, m4 = st.columns(4)
+
+    if "compound_return_pct" in metric_row.index:
+        m1.metric("Compound Return", format_pct(metric_row["compound_return_pct"]))
+    else:
+        m1.metric("Compound Return", "-")
+
+    if "win_rate" in metric_row.index:
+        m2.metric("Win Rate", format_pct(metric_row["win_rate"]))
+    else:
+        m2.metric("Win Rate", "-")
+
+    if "profit_factor" in metric_row.index:
+        m3.metric("Profit Factor", format_number(metric_row["profit_factor"]))
+    else:
+        m3.metric("Profit Factor", "-")
+
+    if "total_trades" in metric_row.index:
+        m4.metric("Total Trades", int(metric_row["total_trades"]))
+    else:
+        m4.metric("Total Trades", "-")
+
+    show_cols = [
+        "driver",
+        "ticker",
+        "rule",
+        "total_trades",
+        "wins",
+        "losses",
+        "win_rate",
+        "profit_factor",
+        "compound_return_pct",
+        "avg_trade_return_pct",
+        "median_trade_return_pct",
+        "best_trade_pct",
+        "worst_trade_pct",
+        "max_drawdown_pct",
+        "score",
+    ]
+
+    show_cols = [c for c in show_cols if c in summary.columns]
+
+    st.dataframe(summary[show_cols].head(30), use_container_width=True, hide_index=True)
+
+    return summary
+
+
+def get_best_rule_for_ticker(summary, selected_ticker):
+    if summary.empty or "ticker" not in summary.columns:
+        return {}
+
+    df = normalize_summary_for_display(summary)
+    df["ticker"] = df["ticker"].astype(str).str.upper().str.strip()
+    df = df[df["ticker"] == selected_ticker].copy()
+
+    if df.empty:
+        return {}
+
+    sort_cols = [c for c in ["score", "profit_factor", "compound_return_pct"] if c in df.columns]
+    if sort_cols:
+        df = df.sort_values(sort_cols, ascending=False)
+
+    return df.iloc[0].to_dict()
+
+
+def filter_trades_by_best_rule(trades, config, selected_ticker, best_rule):
+    if trades.empty:
+        return trades
+
+    df = trades.copy()
+
+    if "ticker" in df.columns:
+        df["ticker"] = df["ticker"].astype(str).str.upper().str.strip()
+        df = df[df["ticker"] == selected_ticker].copy()
+
+    # Coal generic backtest columns
+    rule_filters = {
+        "driver_symbol": best_rule.get("driver_symbol", config.get("driver_symbol")),
+        "lookback_days": best_rule.get("lookback_days", config.get("lookback_days")),
+        "threshold_pct": best_rule.get("threshold_pct", config.get("threshold_pct")),
+        "hold_days": best_rule.get("hold_days", config.get("hold_days")),
+        "cooldown_days": best_rule.get("cooldown_days", config.get("cooldown_days")),
+    }
+
+    for col, value in rule_filters.items():
+        if col in df.columns and value is not None:
+            if col == "driver_symbol":
+                df = df[df[col].astype(str).str.upper().str.strip() == str(value).upper()].copy()
+            else:
+                df = df[pd.to_numeric(df[col], errors="coerce") == float(value)].copy()
+
+    return df
+
+
+def show_yearly_and_trades(config, selected_ticker, summary):
+    trades = load_trades(config)
+    yearly = load_yearly(config)
+    best_rule = get_best_rule_for_ticker(summary, selected_ticker)
+
+    st.subheader(f"{selected_ticker} Year-by-Year Attribution")
+
+    if config.get("yearly_source") == "db" and not yearly.empty:
+        df_yearly = yearly.copy()
+
+        if "ticker" in df_yearly.columns:
+            df_yearly["ticker"] = df_yearly["ticker"].astype(str).str.upper().str.strip()
+            df_yearly = df_yearly[df_yearly["ticker"] == selected_ticker].copy()
+
+        if df_yearly.empty:
+            st.info("Yearly attribution belum tersedia untuk ticker ini.")
+        else:
+            st.dataframe(df_yearly, use_container_width=True, hide_index=True)
+
+            y_col = None
+            for candidate in ["annual_return_pct", "total_simple_return_pct", "return_pct"]:
+                if candidate in df_yearly.columns:
+                    y_col = candidate
+                    break
+
+            if "year" in df_yearly.columns and y_col is not None:
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Bar(
+                        x=df_yearly["year"],
+                        y=df_yearly[y_col],
+                        name=y_col,
+                    )
+                )
+                fig.update_layout(
+                    height=420,
+                    xaxis_title="Year",
+                    yaxis_title=y_col,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    elif config.get("yearly_source") == "computed_from_trades" and not trades.empty:
+        trade_filtered = filter_trades_by_best_rule(trades, config, selected_ticker, best_rule)
+
+        date_col = "entry_date" if "entry_date" in trade_filtered.columns else "buy_date" if "buy_date" in trade_filtered.columns else None
+
+        if trade_filtered.empty or date_col is None or "return_pct" not in trade_filtered.columns:
+            st.info("Trade detail belum cukup untuk hitung yearly attribution.")
+        else:
+            trade_filtered[date_col] = safe_to_datetime(trade_filtered[date_col])
+            trade_filtered["return_pct"] = safe_numeric(trade_filtered["return_pct"])
+            trade_filtered = trade_filtered.dropna(subset=[date_col, "return_pct"])
+            trade_filtered["year"] = trade_filtered[date_col].dt.year
+
+            yearly_calc = trade_filtered.groupby("year").agg(
+                trades=("return_pct", "count"),
+                wins=("return_pct", lambda x: (x > 0).sum()),
+                losses=("return_pct", lambda x: (x <= 0).sum()),
+                avg_return_pct=("return_pct", "mean"),
+                total_simple_return_pct=("return_pct", "sum"),
+                best_trade_pct=("return_pct", "max"),
+                worst_trade_pct=("return_pct", "min"),
+            ).reset_index()
+
+            yearly_calc["win_rate"] = yearly_calc["wins"] / yearly_calc["trades"] * 100
+            yearly_calc = yearly_calc.round(2)
+
+            st.dataframe(yearly_calc, use_container_width=True, hide_index=True)
+
+            fig = go.Figure()
+            fig.add_trace(
+                go.Bar(
+                    x=yearly_calc["year"],
+                    y=yearly_calc["total_simple_return_pct"],
+                    name="Total Simple Return %",
+                )
+            )
+            fig.update_layout(
+                height=420,
+                xaxis_title="Year",
+                yaxis_title="Total Simple Return %",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Yearly attribution belum tersedia.")
+
+    st.subheader(f"{selected_ticker} Trade Detail")
+
+    if trades.empty:
+        st.warning("Trade detail belum tersedia.")
+        return
+
+    trade_filtered = filter_trades_by_best_rule(trades, config, selected_ticker, best_rule)
+
+    if trade_filtered.empty:
+        st.info("Trade detail kosong untuk ticker/rule ini.")
+        return
+
+    for col in ["event_date", "signal_date", "buy_date", "sell_date", "entry_date", "exit_date"]:
+        if col in trade_filtered.columns:
+            trade_filtered[col] = safe_to_datetime(trade_filtered[col])
+
+    show_cols = [
+        "signal_date",
+        "event_date",
+        "driver_return_pct",
+        "driver_change_pct",
+        "entry_date",
+        "buy_date",
+        "exit_date",
+        "sell_date",
+        "entry_price",
+        "buy_price",
+        "exit_price",
+        "sell_price",
+        "return_pct",
+        "profit_rp",
+        "ending_value",
+    ]
+
+    show_cols = [c for c in show_cols if c in trade_filtered.columns]
+
+    sort_col = None
+    for candidate in ["entry_date", "buy_date", "signal_date", "event_date"]:
+        if candidate in trade_filtered.columns:
+            sort_col = candidate
+            break
+
+    if sort_col:
+        trade_filtered = trade_filtered.sort_values(sort_col)
+
+    st.dataframe(trade_filtered[show_cols], use_container_width=True, hide_index=True)
+
+def build_valid_signal_events(driver_prices, config):
+    driver_symbol = str(config["driver_symbol"]).upper().strip()
+    lookback_days = int(config["lookback_days"])
+    threshold_pct = float(config["threshold_pct"])
+    cooldown_days = int(config["cooldown_days"])
+
+    if driver_prices.empty:
+        return pd.DataFrame()
+
+    d = driver_prices.copy()
+    d.columns = d.columns.str.strip().str.lower()
+
+    if "driver" not in d.columns or "driver_date" not in d.columns or "value" not in d.columns:
+        return pd.DataFrame()
+
+    d["driver"] = d["driver"].astype(str).str.upper().str.strip()
+    d["driver_date"] = safe_to_datetime(d["driver_date"])
+    d["value"] = safe_numeric(d["value"])
+
+    d = d[
+        d["driver"] == driver_symbol
+    ].dropna(subset=["driver_date", "value"]).copy()
+
+    d = d.sort_values("driver_date").reset_index(drop=True)
+
+    if d.empty or len(d) <= lookback_days:
+        return pd.DataFrame()
+
+    d["driver_return_pct"] = (
+        d["value"].pct_change(lookback_days) * 100
+    )
+
+    events = []
+    cooldown_until_idx = -1
+
+    for i, row in d.iterrows():
+        if i <= cooldown_until_idx:
+            continue
+
+        if pd.notna(row["driver_return_pct"]) and row["driver_return_pct"] >= threshold_pct:
+            cooldown_end_idx = min(i + cooldown_days, len(d) - 1)
+            cooldown_end_date = d.loc[cooldown_end_idx, "driver_date"]
+
+            events.append({
+                "signal_date": row["driver_date"],
+                "driver_symbol": driver_symbol,
+                "driver_close": row["value"],
+                "driver_return_pct": row["driver_return_pct"],
+                "lookback_days": lookback_days,
+                "threshold_pct": threshold_pct,
+                "cooldown_days": cooldown_days,
+                "cooldown_until_est_date": cooldown_end_date,
+            })
+
+            cooldown_until_idx = i + cooldown_days
+
+    events_df = pd.DataFrame(events)
+
+    if events_df.empty:
+        return events_df
+
+    events_df["signal_date"] = pd.to_datetime(
+        events_df["signal_date"],
+        format="mixed",
+        errors="coerce"
+    ).dt.strftime("%Y-%m-%d")
+
+    events_df["cooldown_until_est_date"] = pd.to_datetime(
+        events_df["cooldown_until_est_date"],
+        format="mixed",
+        errors="coerce"
+    ).dt.strftime("%Y-%m-%d")
+
+    events_df["driver_close"] = safe_numeric(events_df["driver_close"]).round(2)
+    events_df["driver_return_pct"] = safe_numeric(events_df["driver_return_pct"]).round(2)
+
+    return events_df
+
+
+def show_valid_signal_history(driver_prices, config):
+    st.subheader("Valid Signal History")
+
+    valid_events = build_valid_signal_events(
+        driver_prices=driver_prices,
+        config=config,
+    )
+
+    if valid_events.empty:
+        st.info("Belum ada valid signal event.")
+        return
+
+    show_cols = [
+        "signal_date",
+        "driver_symbol",
+        "driver_close",
+        "driver_return_pct",
+        "lookback_days",
+        "threshold_pct",
+        "cooldown_days",
+        "cooldown_until_est_date",
+    ]
+
+    show_cols = [c for c in show_cols if c in valid_events.columns]
+
+    st.caption(
+        "Tabel ini hanya menampilkan valid signal pertama setelah cooldown. "
+        "Raw threshold-hit harian selama cooldown tidak dihitung sebagai signal baru."
+    )
+
+    st.dataframe(
+        valid_events.sort_values("signal_date", ascending=False)[show_cols].head(30),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+def render_driver_page(page_name):
+    config = DRIVER_CONFIG[page_name]
+
+    st.title(config["title"])
+    st.caption(config["description"])
+
+    min_date, max_date = get_available_date_range(tuple(config["tickers"]))
+
+    st.sidebar.subheader(f"{config['title']} Settings")
+
+    selected_ticker = st.sidebar.selectbox(
+        "Pilih Saham",
+        config["tickers"],
+        index=config["tickers"].index(config["primary_ticker"]),
+        key=f"{page_name}_ticker",
+    )
+
+    range_option = st.sidebar.radio(
+        "Range",
+        ["1D", "1W", "3M", "1Y", "Custom"],
+        horizontal=True,
+        key=f"{page_name}_range",
+    )
+    
+    start_date, end_date = get_range_dates(range_option, max_date, page_name)
+
+    if pd.to_datetime(start_date) > pd.to_datetime(end_date):
+        st.error("Tanggal From tidak boleh lebih besar dari To.")
+        st.stop()
+
+    st.sidebar.caption(f"Range aktif: {start_date} s/d {end_date}")
+
+    driver_prices = load_driver_prices()
+    stock_prices = load_stock_prices(tuple(config["tickers"]), start_date, end_date)
+
+    show_signal_status(config, driver_prices)
+    show_valid_signal_history(driver_prices, config)
+    show_rule_card(config)
+    show_driver_today(config, driver_prices)
+    show_watchlist(config)
+    plot_driver_chart(config, driver_prices, start_date, end_date)
+    plot_stock_chart(stock_prices, selected_ticker)
+
+    summary = show_backtest_summary(config, selected_ticker)
+    show_yearly_and_trades(config, selected_ticker, summary)
+
+
+# ======================
+# MAIN APP
+# ======================
+
+st.sidebar.title("Indonesia Market Dashboard")
+
+page = st.sidebar.selectbox(
+    "Menu",
+    [
+        "Gold Driver",
+        "Coal Driver",
+        "Nickel Driver",
+    ],
 )
 
-price_df["trade_date"] = pd.to_datetime(price_df["trade_date"])
-
-st.sidebar.caption(f"Range aktif: {start_date} s/d {end_date}")
-st.sidebar.caption(f"Rows loaded: {len(price_df)}")
-
-# ======================
-# PRICE CHART
-# ======================
-
-show_price_chart(
-    price_df,
-    selected_ticker
-)
-
-# ======================
-# DRIVER BREAKDOWN
-# ======================
-
-show_driver_breakdown(
-    mapping_df,
-    driver_df,
-    selected_ticker
-)
-
-# ======================
-# SECTOR SUMMARY
-# ======================
-
-show_sector_summary(latest_df)
-
-# ======================
-# MOMENTUM RANKING
-# ======================
-
-show_momentum(latest_df)
+render_driver_page(page)
