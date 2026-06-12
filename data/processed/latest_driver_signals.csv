@@ -1,3 +1,3 @@
 driver_group,driver_symbol,target_ticker,lookback_days,threshold_pct,hold_days,cooldown_days,status,notes,driver_latest_date,driver_latest_close,driver_prev_date,driver_prev_close,driver_return_pct,threshold_hit,signal_status,actionable_signal,last_signal_date,last_signal_return_pct,days_since_last_signal,cooldown_remaining_days,in_cooldown,stock_latest_date,stock_latest_close,error
-GOLD,GOLD,HRTA.JK,10,5.0,10,20,FINAL,Final main rule from GOLD research,2026-06-11,4212.2001953125,2026-05-28,4499.2998046875,-6.38,False,NO_SIGNAL,False,2026-04-14,6.61,41.0,0.0,False,2026-06-04,2110.0,
-COAL,COAL,ADRO.JK,10,10.0,10,30,FINAL_CANDIDATE,Strong final candidate from COAL research,,,,,,,,,,,,,,,,Not enough driver data for COAL
+GOLD,GOLD,HRTA.JK,10,5.0,10,20,FINAL,Final main rule from GOLD research,2026-06-11,4206.2998046875,2026-05-28,4499.2998046875,-6.51,False,NO_SIGNAL,False,2026-04-14,6.61,41,0,False,2026-06-12,1910.0,
+COAL,COAL,ADRO.JK,10,10.0,10,30,FINAL_CANDIDATE,Strong final candidate from COAL research,2026-06-09,150.25,2026-05-26,132.6,13.31,True,ACTIVE_BUT_COOLDOWN,False,2026-06-08,14.54,1,29,True,2026-06-12,2260.0,
