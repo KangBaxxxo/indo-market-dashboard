@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 jobs:
-  update-data:
+  update-market-data:
     runs-on: ubuntu-latest
 
     steps:
@@ -34,75 +34,37 @@ jobs:
         run: |
           python -u update_data.py
 
-      - name: Update yfinance driver prices
-        run: |
-          python -u update_drivers.py
-
-      - name: Build latest driver signals
-        run: |
-          python -u latest_driver_signals.py
-
-      - name: Check updated data
+      - name: Check market database
         run: |
           python - <<'PY'
           import sqlite3
           import pandas as pd
 
-          print("=== DRIVER PRICES ===")
-          driver = pd.read_csv("data/driver_prices.csv")
-          driver["driver_date"] = pd.to_datetime(driver["driver_date"], format="mixed", errors="coerce")
-
-          print(
-              driver.groupby("driver").agg(
-                  rows=("value", "count"),
-                  latest_date=("driver_date", "max"),
-                  latest_value=("value", "last"),
-              ).to_string()
-          )
-
-          print("")
-          print("=== LATEST DRIVER SIGNALS ===")
-          signals = pd.read_csv("data/processed/latest_driver_signals.csv")
-          print(signals[[ 
-              "driver_group",
-              "driver_symbol",
-              "driver_latest_date",
-              "driver_return_pct",
-              "signal_status",
-              "last_signal_date",
-          ]].to_string(index=False))
-
-          print("")
           print("=== MARKET DB SNAPSHOT ===")
+
           con = sqlite3.connect("data/market.db")
           snap = pd.read_sql("""
-              SELECT ticker, trade_date, close_price, volume
-              FROM latest_snapshot
-              WHERE ticker IN (
-                  'HRTA.JK', 'ANTM.JK', 'MDKA.JK', 'BRMS.JK', 'EMAS.JK',
-                  'ADRO.JK', 'PTBA.JK', 'ITMG.JK', 'HRUM.JK', 'BYAN.JK', 'BUMI.JK',
-                  'INCO.JK', 'NCKL.JK', 'MBMA.JK'
-              )
+              SELECT ticker, MAX(trade_date) AS latest_date
+              FROM daily_prices
+              GROUP BY ticker
               ORDER BY ticker
+              LIMIT 50
           """, con)
           con.close()
 
           print(snap.to_string(index=False))
           PY
 
-      - name: Commit updated data
+      - name: Commit market database only
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
           git add data/market.db || true
-          git add data/driver_prices.csv || true
-          git add data/driver_scores.csv || true
-          git add data/processed/latest_driver_signals.csv || true
 
           if git diff --cached --quiet; then
-            echo "No changes to commit."
+            echo "No market database changes to commit."
           else
-            git commit -m "daily market and driver data update"
+            git commit -m "daily stock market data update"
             git push
           fi
