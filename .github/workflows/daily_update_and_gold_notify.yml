@@ -52,6 +52,10 @@ jobs:
         run: |
           python -u latest_driver_signals.py
 
+      - name: Build gold HRTA confidence signal
+        run: |
+          python -u build_gold_hrta_confidence_signal.py
+
       - name: Check driver and signal data
         run: |
           python - <<'PY'
@@ -111,6 +115,7 @@ jobs:
           git add data/processed/gold_backtest_summary.csv || true
           git add data/processed/gold_trade_details.csv || true
           git add data/processed/gold_year_by_year.csv || true
+          git add data/processed/gold_hrta_confidence_signal.csv || true
 
           if git diff --cached --quiet; then
             echo "No driver or signal changes to commit."
