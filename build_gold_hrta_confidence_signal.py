@@ -162,6 +162,7 @@ def classify_confidence(
     ma20=None,
     ma50=None,
     rsi14=None,
+    dist_ma20_pct=None,
 ):
     reasons = []
 
@@ -235,6 +236,16 @@ def classify_confidence(
             else:
                 confirmation_notes.append("HRTA close < MA20, momentum not fully confirmed")
 
+        if dist_ma20_pct is not None and not pd.isna(dist_ma20_pct):
+            if dist_ma20_pct >= 0:
+                confirmation_notes.append(
+                    f"HRTA above MA20 by {dist_ma20_pct:.2f}%"
+                )
+            else:
+                confirmation_notes.append(
+                    f"HRTA below MA20 by {dist_ma20_pct:.2f}%, momentum not fully confirmed"
+                )
+    
     if ma20 is not None and ma50 is not None:
         if not pd.isna(ma20) and not pd.isna(ma50):
             if ma20 >= ma50:
@@ -406,7 +417,19 @@ def main():
         entry_dist_ma20 = entry_row["dist_ma20_pct"]
 
         if signal_status in ["WAIT_ENTRY", "ACTIVE_HOLD_PERIOD"]:
-            confidence = classify_confidence(entry_ret20)
+            confidence = classify_confidence(
+                hrta_ret20=entry_ret20,
+                gold_ret10=last_signal["gold_return_10d_pct"],
+                rsi14=entry_rsi,
+                dist_ma20_pct=entry_dist_ma20,
+            )
+        else:
+            confidence = {
+                "confidence_level": "INACTIVE",
+                "recommended_action": "WAIT",
+                "position_size_hint": "NO_SIZE",
+                "reason": "Last GOLD-HRTA signal has expired. Wait for a new valid GOLD trigger.",
+            }
 
         elif signal_status == "COOLDOWN_PERIOD":
             confidence = {
