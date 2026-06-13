@@ -1,0 +1,58 @@
+name: Test Telegram
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-telegram:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send test Telegram message
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+          chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+          if not bot_token:
+              raise ValueError("TELEGRAM_BOT_TOKEN missing in GitHub Actions secrets")
+
+          if not chat_id:
+              raise ValueError("TELEGRAM_CHAT_ID missing in GitHub Actions secrets")
+
+          message = """
+🧪 <b>TEST TELEGRAM</b>
+
+Indonesia Market Dashboard connected.
+
+Gold notify: OK
+Coal notify: belum dibuat
+Nickel notify: belum dibuat
+""".strip()
+
+          url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+          response = requests.post(
+              url,
+              json={
+                  "chat_id": chat_id,
+                  "text": message,
+                  "parse_mode": "HTML",
+              },
+              timeout=30,
+          )
+
+          print("Status:", response.status_code)
+          print(response.text)
+
+          response.raise_for_status()
+          PY
