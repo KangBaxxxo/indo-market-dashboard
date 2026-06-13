@@ -154,7 +154,17 @@ def get_stock_row_on_or_before(hrta_df, date_value):
     return result.iloc[0]
 
 
-def classify_confidence(hrta_ret20):
+def classify_confidence(
+    hrta_ret20,
+    gold_ret5=None,
+    gold_ret10=None,
+    close=None,
+    ma20=None,
+    ma50=None,
+    rsi14=None,
+):
+    reasons = []
+
     if pd.isna(hrta_ret20):
         return {
             "confidence_level": "UNKNOWN",
@@ -163,36 +173,97 @@ def classify_confidence(hrta_ret20):
             "reason": "HRTA ret20D data unavailable.",
         }
 
-    if hrta_ret20 <= HIGH_CONF_RET20_MAX:
+    # Optional safety blocker: GOLD trend weakening
+    if gold_ret10 is not None and not pd.isna(gold_ret10) and gold_ret10 < 0:
         return {
-            "confidence_level": "ACTIVE_HIGH_CONFIDENCE",
-            "recommended_action": "BUY_ALLOWED",
-            "position_size_hint": "FULL_PLANNED_SIZE",
+            "confidence_level": "BLOCKED_GOLD_WEAK",
+            "recommended_action": "NO_ENTRY",
+            "position_size_hint": "NO_SIZE",
             "reason": (
-                f"GOLD trigger valid and HRTA ret20D={hrta_ret20:.2f}% "
-                f"is <= {HIGH_CONF_RET20_MAX:.0f}%. HRTA has not rallied too far yet."
+                f"GOLD trigger invalid/weak because GOLD ret10D={gold_ret10:.2f}% is negative."
             ),
         }
 
-    if hrta_ret20 <= NORMAL_CONF_RET20_MAX:
+    # Optional safety blocker: HRTA already overheated by RSI
+    if rsi14 is not None and not pd.isna(rsi14) and rsi14 > 75:
         return {
-            "confidence_level": "ACTIVE_NORMAL",
-            "recommended_action": "BUY_ALLOWED_SMALLER_SIZE",
-            "position_size_hint": "HALF_SIZE_OR_TRADING_SIZE",
+            "confidence_level": "BLOCKED_RSI_OVERHEATED",
+            "recommended_action": "NO_ENTRY",
+            "position_size_hint": "NO_SIZE",
+            "reason": (
+                f"GOLD trigger valid but HRTA RSI14={rsi14:.2f} is > 75. Avoid chasing."
+            ),
+        }
+
+    # Base rule: HRTA 20D return heat filter
+    if hrta_ret20 <= HIGH_CONF_RET20_MAX:
+        confidence_level = "ACTIVE_HIGH_CONFIDENCE"
+        recommended_action = "BUY_ALLOWED"
+        position_size_hint = "FULL_PLANNED_SIZE"
+        reasons.append(
+            f"GOLD trigger valid and HRTA ret20D={hrta_ret20:.2f}% "
+            f"is <= {HIGH_CONF_RET20_MAX:.0f}%. HRTA has not rallied too far yet."
+        )
+
+    elif hrta_ret20 <= NORMAL_CONF_RET20_MAX:
+        confidence_level = "ACTIVE_NORMAL"
+        recommended_action = "BUY_ALLOWED_SMALLER_SIZE"
+        position_size_hint = "HALF_SIZE_OR_TRADING_SIZE"
+        reasons.append(
+            f"GOLD trigger valid but HRTA ret20D={hrta_ret20:.2f}% "
+            f"is already above {HIGH_CONF_RET20_MAX:.0f}%."
+        )
+
+    else:
+        return {
+            "confidence_level": "BLOCKED_OVERHEATED",
+            "recommended_action": "NO_ENTRY",
+            "position_size_hint": "NO_SIZE",
             "reason": (
                 f"GOLD trigger valid but HRTA ret20D={hrta_ret20:.2f}% "
-                f"is already above {HIGH_CONF_RET20_MAX:.0f}%."
+                f"is > {NORMAL_CONF_RET20_MAX:.0f}%. Avoid chasing."
             ),
         }
 
+    # Optional confirmation bonus / note
+    confirmation_notes = []
+
+    if close is not None and ma20 is not None:
+        if not pd.isna(close) and not pd.isna(ma20):
+            if close >= ma20:
+                confirmation_notes.append("HRTA close >= MA20")
+            else:
+                confirmation_notes.append("HRTA close < MA20, momentum not fully confirmed")
+
+    if ma20 is not None and ma50 is not None:
+        if not pd.isna(ma20) and not pd.isna(ma50):
+            if ma20 >= ma50:
+                confirmation_notes.append("MA20 >= MA50")
+            else:
+                confirmation_notes.append("MA20 < MA50")
+
+    if rsi14 is not None and not pd.isna(rsi14):
+        if 35 <= rsi14 <= 70:
+            confirmation_notes.append("RSI14 healthy 35-70")
+        elif rsi14 < 35:
+            confirmation_notes.append("RSI14 weak/oversold < 35")
+
+    if gold_ret5 is not None and not pd.isna(gold_ret5):
+        if gold_ret5 >= 3:
+            confirmation_notes.append(f"GOLD ret5D={gold_ret5:.2f}% supports early momentum")
+
+    if gold_ret10 is not None and not pd.isna(gold_ret10):
+        if gold_ret10 >= 5:
+            confirmation_notes.append(f"GOLD ret10D={gold_ret10:.2f}% confirms main trigger")
+
+    if confirmation_notes:
+        reasons.append("Confirmation: " + " | ".join(confirmation_notes))
+
     return {
-        "confidence_level": "BLOCKED_OVERHEATED",
-        "recommended_action": "NO_ENTRY",
-        "position_size_hint": "NO_SIZE",
-        "reason": (
-            f"GOLD trigger valid but HRTA ret20D={hrta_ret20:.2f}% "
-            f"is > {NORMAL_CONF_RET20_MAX:.0f}%. Avoid chasing."
-        ),
+        "confidence_level": confidence_level,
+        "recommended_action": recommended_action,
+        "position_size_hint": position_size_hint,
+        "reason": " ".join(reasons),
     }
 
 
