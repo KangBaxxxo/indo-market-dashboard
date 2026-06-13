@@ -746,6 +746,71 @@ def show_signal_status(config, driver_prices=None):
         )
         st.dataframe(signal_df[detail_cols], use_container_width=True, hide_index=True)
 
+    with st.expander("Signal Detail", expanded=False):
+        st.caption(
+            "Countdown memakai actual available trading rows di daily_prices. "
+            "Entry date dihitung sebagai day 1. Sell date baru terisi kalau row trading day ke-N sudah tersedia."
+        )
+        st.dataframe(signal_df[detail_cols], use_container_width=True, hide_index=True)
+
+
+def show_hrta_gold_confidence():
+    st.subheader("HRTA Gold-Driven Confidence Signal")
+
+    hrta_conf_path = PROCESSED_DIR / "gold_hrta_confidence_signal.csv"
+
+    if not hrta_conf_path.exists():
+        st.warning("HRTA gold confidence signal file not found.")
+        return
+
+    hrta_conf = pd.read_csv(hrta_conf_path)
+
+    if hrta_conf.empty:
+        st.warning("HRTA gold confidence signal file is empty.")
+        return
+
+    latest_hrta = hrta_conf.iloc[-1]
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Signal Status", latest_hrta.get("signal_status", "N/A"))
+    col2.metric("Confidence", latest_hrta.get("confidence_level", "N/A"))
+    col3.metric("Action", latest_hrta.get("recommended_action", "N/A"))
+    col4.metric("Size", latest_hrta.get("position_size_hint", "N/A"))
+
+    st.info(latest_hrta.get("reason", "No reason available."))
+
+    show_cols = [
+        "gold_latest_date",
+        "gold_latest_return_10d_pct",
+        "stock_latest_date",
+        "stock_latest_close",
+        "stock_latest_ret20_pct",
+        "signal_status",
+        "confidence_level",
+        "recommended_action",
+        "position_size_hint",
+        "last_signal_date",
+        "last_signal_gold_return_10d_pct",
+        "entry_date",
+        "exit_date",
+        "cooldown_until_date",
+        "entry_close",
+        "entry_hrta_ret20_pct",
+        "entry_hrta_ret10_pct",
+        "entry_rsi",
+        "entry_dist_ma20_pct",
+    ]
+
+    existing_cols = [c for c in show_cols if c in hrta_conf.columns]
+
+    with st.expander("HRTA Gold Confidence Detail", expanded=False):
+        st.dataframe(
+            hrta_conf[existing_cols],
+            use_container_width=True,
+            hide_index=True,
+        )
+
 def show_rule_card(config):
     st.subheader("Final Rule")
 
@@ -1371,6 +1436,10 @@ def render_driver_page(page_name):
     stock_prices = load_stock_prices(tuple(config["tickers"]), start_date, end_date)
 
     show_signal_status(config, driver_prices)
+    
+    if config.get("driver_group") == "GOLD":
+        show_hrta_gold_confidence()
+        
     show_valid_signal_history(driver_prices, config)
     show_rule_card(config)
     show_driver_today(config, driver_prices)
