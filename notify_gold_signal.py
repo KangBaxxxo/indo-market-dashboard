@@ -2,6 +2,7 @@ import os
 import json
 import urllib.parse
 import urllib.request
+import html
 from pathlib import Path
 
 import pandas as pd
@@ -53,7 +54,59 @@ def send_telegram(message):
     with urllib.request.urlopen(request) as response:
         return response.read().decode("utf-8")
 
+def build_hrta_confidence_block():
+    path = "data/processed/gold_hrta_confidence_signal.csv"
 
+    if not os.path.exists(path):
+        return "\n\n<b>HRTA Gold Confidence</b>:\nData belum tersedia."
+
+    try:
+        df = pd.read_csv(path)
+
+        if df.empty:
+            return "\n\n<b>HRTA Gold Confidence</b>:\nData kosong."
+
+        row = df.iloc[-1]
+
+        signal_status = row.get("signal_status", "N/A")
+        confidence = row.get("confidence_level", "N/A")
+        action = row.get("recommended_action", "N/A")
+        size = row.get("position_size_hint", "N/A")
+        reason = html.escape(str(row.get("reason", "N/A")))
+
+        entry_rsi = row.get("entry_rsi", None)
+        entry_dist_ma20 = row.get("entry_dist_ma20_pct", None)
+        entry_ret20 = row.get("entry_hrta_ret20_pct", None)
+
+        def fmt_pct(value):
+            if pd.isna(value):
+                return "N/A"
+            return f"{float(value):.2f}%"
+
+        def fmt_num(value):
+            if pd.isna(value):
+                return "N/A"
+            return f"{float(value):.2f}"
+
+        return f"""
+
+<b>HRTA Gold Confidence</b>
+Status: {signal_status}
+Confidence: {confidence}
+Action: {action}
+Size: {size}
+
+Entry HRTA ret20D: {fmt_pct(entry_ret20)}
+Entry RSI: {fmt_num(entry_rsi)}
+Entry dist MA20: {fmt_pct(entry_dist_ma20)}
+
+Reason:
+{reason}
+""".rstrip()
+
+    except Exception as e:
+        return f"\n\n<b>HRTA Gold Confidence</b>:\nGagal baca data: {html.escape(str(e))}"
+    
 # ======================
 # STATE
 # ======================
@@ -191,6 +244,8 @@ def main():
         print("Signal sudah pernah dikirim. Skip.")
         return
 
+    hrta_block = build_hrta_confidence_block()
+
     message = f"""
 🚨 <b>GOLD SIGNAL ACTIVE</b>
 
@@ -200,7 +255,7 @@ def main():
 <b>GOLD 10D Change</b>: +{last_event_change:.2f}%
 
 <b>Rule</b>:
-GOLD naik >= +{THRESHOLD}% dalam {LOOKBACK} hari
+GOLD naik &gt;= +{THRESHOLD}% dalam {LOOKBACK} hari
 Cooldown: {COOLDOWN_DAYS} hari
 Hold: 10 trading days
 
@@ -209,6 +264,7 @@ Hold: 10 trading days
 
 <b>Gold Watchlist</b>:
 {", ".join(WATCHLIST)}
+{hrta_block}
 """.strip()
 
     send_telegram(message)
