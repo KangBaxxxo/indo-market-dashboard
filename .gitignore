@@ -1,1 +1,18 @@
 .env
+# Python cache
+__pycache__/
+*.pyc
+
+# Local/generated outputs
+data/output/
+archive/
+
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local/generated outputs
+data/output/
+archive/
+

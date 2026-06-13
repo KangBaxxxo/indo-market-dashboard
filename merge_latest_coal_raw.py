@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 MASTER_PATH = Path("data/raw/newcastle_coal.csv")
-LATEST_PATH = Path("data/raw/newcastle_coal_latest.csv")
+LATEST_PATH = Path("Newcastle Coal Futures Historical Data.csv")
 
 
 def detect_columns(df):

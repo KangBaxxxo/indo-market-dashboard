@@ -162,6 +162,12 @@ def backtest_ticker(ticker, events, stock_df):
 
     stock_dates = s["trade_date_norm"].drop_duplicates().reset_index(drop=True)
 
+    if stock_dates.empty:
+        return pd.DataFrame()
+
+    first_stock_date = stock_dates.iloc[0]
+    last_stock_date = stock_dates.iloc[-1]
+
     price_map = (
         s.drop_duplicates("trade_date_norm", keep="last")
         .set_index("trade_date_norm")["close_price"]
@@ -172,6 +178,17 @@ def backtest_ticker(ticker, events, stock_df):
 
     for _, ev in events.iterrows():
         signal_date = pd.to_datetime(ev["signal_date"]).normalize()
+
+        # CRITICAL:
+        # Skip driver signals before this ticker has valid stock data.
+        # Without this, old GOLD signals from 2001-2016 get mapped into
+        # HRTA's first available trading day in 2017.
+        if signal_date < first_stock_date:
+            continue
+
+        if signal_date > last_stock_date:
+            continue
+
         entry_date = next_trading_day_after(signal_date, stock_dates)
         exit_date = nth_trading_day_from_entry(entry_date, HOLD_DAYS, stock_dates)
 
@@ -217,7 +234,6 @@ def backtest_ticker(ticker, events, stock_df):
         })
 
     return pd.DataFrame(trades)
-
 
 def calc_profit_factor(returns):
     wins = returns[returns > 0].sum()
