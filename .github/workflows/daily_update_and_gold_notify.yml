@@ -51,6 +51,7 @@ jobs:
       - name: Build latest driver signals
         run: |
           python -u latest_driver_signals.py
+          python -u build_nickel_latest_signal.py
 
       - name: Build gold HRTA confidence signal
         run: |
