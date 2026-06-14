@@ -55,6 +55,7 @@ jobs:
       - name: Build gold HRTA confidence signal
         run: |
           python -u build_gold_hrta_confidence_signal.py
+          python -u notify_driver_signals.py
 
       - name: Check driver and signal data
         run: |
@@ -112,6 +113,7 @@ jobs:
           git add data/driver_scores.csv || true
           git add data/processed/latest_driver_signals.csv || true
           git add data/gold_signal_state.json || true
+          git add data/driver_signal_notify_state.json || true
           git add data/processed/gold_backtest_summary.csv || true
           git add data/processed/gold_trade_details.csv || true
           git add data/processed/gold_year_by_year.csv || true
