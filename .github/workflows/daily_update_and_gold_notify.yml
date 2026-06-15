@@ -8,7 +8,7 @@ on:
   schedule:
     # 10:00 UTC = 17:00 WIB, Setiap hari
     # Dibuat setelah Update Market Data supaya market.db sudah fresh dulu.
-    - cron: "0 10 * * *"'
+    - cron: "0 10 * * *"
 
 permissions:
   contents: write
