@@ -6,9 +6,9 @@ env:
 on:
   workflow_dispatch:
   schedule:
-    # 10:00 UTC = 17:00 WIB, Senin-Jumat
+    # 10:00 UTC = 17:00 WIB, Setiap hari
     # Dibuat setelah Update Market Data supaya market.db sudah fresh dulu.
-    - cron: "0 10 * * 1-5"
+    - cron: "0 10 * * *"'
 
 permissions:
   contents: write
