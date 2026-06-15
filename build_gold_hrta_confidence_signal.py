@@ -423,13 +423,6 @@ def main():
                 rsi14=entry_rsi,
                 dist_ma20_pct=entry_dist_ma20,
             )
-        else:
-            confidence = {
-                "confidence_level": "INACTIVE",
-                "recommended_action": "WAIT",
-                "position_size_hint": "NO_SIZE",
-                "reason": "Last GOLD-HRTA signal has expired. Wait for a new valid GOLD trigger.",
-            }
 
         elif signal_status == "COOLDOWN_PERIOD":
             confidence = {
@@ -438,11 +431,11 @@ def main():
                 "position_size_hint": "NO_SIZE",
                 "reason": (
                     "Last GOLD-HRTA signal is already past entry/exit window "
-                    "and currently in cooldown period. No new entry."
+                    "but still inside cooldown period."
                 ),
             }
 
-        else:
+        elif signal_status == "EXPIRED_SIGNAL":
             confidence = {
                 "confidence_level": "NO_ACTIVE_SIGNAL",
                 "recommended_action": "WATCH_ONLY",
@@ -453,6 +446,14 @@ def main():
                 ),
             }
 
+        else:
+            confidence = {
+                "confidence_level": "INACTIVE",
+                "recommended_action": "WAIT",
+                "position_size_hint": "NO_SIZE",
+                "reason": "Last GOLD-HRTA signal is inactive.",
+            }
+            
     out = {
         **base_row,
         "signal_status": signal_status,
