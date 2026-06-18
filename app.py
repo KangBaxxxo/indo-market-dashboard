@@ -625,9 +625,12 @@ def show_signal_status(config, driver_prices=None):
 
     row = signal_df.iloc[0].copy()
 
-    # Use cooldown-debounced valid signal history as the source of truth
-    # for the first trigger date. latest_driver_signals.csv can show raw
-    # threshold-hit dates during cooldown; those are not new valid events.
+    # Use cooldown-debounced valid signal history as the source of truth.
+    # latest_driver_signals.csv can show NO_SIGNAL when today's driver return
+    # is below threshold, but the latest valid event can still be inside
+    # the model hold/cooldown window.
+    latest_valid_event = None
+
     if driver_prices is not None and not driver_prices.empty:
         valid_events = build_valid_signal_events(driver_prices, config)
 
@@ -649,11 +652,10 @@ def show_signal_status(config, driver_prices=None):
                     "signal_date_dt"
                 ).iloc[-1]
 
-                if str(row.get("signal_status", "")).upper() == "ACTIVE_BUT_COOLDOWN":
-                    row["last_signal_date"] = latest_valid_event["signal_date_dt"]
-                    row["last_signal_return_pct"] = latest_valid_event.get(
-                        "driver_return_pct"
-                    )
+                row["last_signal_date"] = latest_valid_event["signal_date_dt"]
+                row["last_signal_return_pct"] = latest_valid_event.get(
+                    "driver_return_pct"
+                )
 
     schedule = build_signal_trade_schedule(row, config)
 
@@ -665,7 +667,34 @@ def show_signal_status(config, driver_prices=None):
     for key, value in schedule.items():
         signal_df[key] = value
         row[key] = value
+        
+    # Recalculate visible signal status from the latest valid event schedule.
+    # This prevents the dashboard from showing NO_SIGNAL while a previous
+    # valid trigger is still inside hold period.
+    if latest_valid_event is not None:
+        elapsed_td = pd.to_numeric(
+            row.get("actual_trading_days_elapsed"),
+            errors="coerce",
+        )
+        cooldown_remaining = pd.to_numeric(
+            row.get("cooldown_remaining_days"),
+            errors="coerce",
+        )
+        hold_days = int(config.get("hold_days", 0))
 
+        if pd.notna(elapsed_td):
+            if elapsed_td < 1:
+                row["signal_status"] = "WAIT_ENTRY"
+            elif hold_days > 0 and elapsed_td <= hold_days:
+                row["signal_status"] = "ACTIVE_ACTIONABLE"
+            elif pd.notna(cooldown_remaining) and cooldown_remaining > 0:
+                row["signal_status"] = "ACTIVE_BUT_COOLDOWN"
+            else:
+                row["signal_status"] = "NO_SIGNAL"
+
+            if "signal_status" in signal_df.columns:
+                signal_df["signal_status"] = row["signal_status"]
+    
     col1, col2, col3, col4 = st.columns(4)
 
     col1.metric(
