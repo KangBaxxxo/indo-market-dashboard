@@ -1,0 +1,172 @@
+name: Manual Lab Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Task to run"
+        required: true
+        default: "driver_snapshot"
+        type: choice
+        options:
+          - db_snapshot
+          - driver_snapshot
+          - build_latest_signals
+          - build_nickel_signal
+          - build_gold_hrta_confidence
+          - telegram_dry_run
+          - full_driver_pipeline
+      commit_outputs:
+        description: "Commit generated output files?"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: write
+
+jobs:
+  manual-lab:
+    runs-on: ubuntu-latest
+
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run selected task
+        run: |
+          echo "Selected task: ${{ github.event.inputs.task }}"
+
+          if [ "${{ github.event.inputs.task }}" = "db_snapshot" ]; then
+            python - <<'PY'
+            import sqlite3
+            import pandas as pd
+
+            con = sqlite3.connect("data/market.db")
+
+            print("=== MARKET DB MAX DATE ===")
+            print(pd.read_sql("""
+            SELECT MAX(trade_date) AS max_date, COUNT(*) AS rows
+            FROM daily_prices
+            """, con).to_string(index=False))
+
+            print("")
+            print("=== WATCHLIST SNAPSHOT ===")
+            print(pd.read_sql("""
+            SELECT ticker, MAX(trade_date) AS latest_date
+            FROM daily_prices
+            WHERE ticker IN (
+              'ADRO.JK','PTBA.JK','BYAN.JK','ITMG.JK','HRUM.JK',
+              'HRTA.JK','ANTM.JK','MDKA.JK','BRMS.JK','EMAS.JK',
+              'INCO.JK','NCKL.JK','MBMA.JK'
+            )
+            GROUP BY ticker
+            ORDER BY ticker
+            """, con).to_string(index=False))
+
+            con.close()
+            PY
+          fi
+
+          if [ "${{ github.event.inputs.task }}" = "driver_snapshot" ]; then
+            python - <<'PY'
+            import pandas as pd
+
+            print("=== DRIVER PRICES ===")
+            driver = pd.read_csv("data/driver_prices.csv")
+            driver["driver_date"] = pd.to_datetime(driver["driver_date"], format="mixed", errors="coerce")
+
+            print(driver.groupby("driver").agg(
+                rows=("value", "count"),
+                latest_date=("driver_date", "max"),
+                latest_value=("value", "last"),
+            ).to_string())
+
+            print("")
+            print("=== LATEST DRIVER SIGNALS ===")
+            signals = pd.read_csv("data/processed/latest_driver_signals.csv")
+            print(signals.to_string(index=False))
+            PY
+          fi
+
+          if [ "${{ github.event.inputs.task }}" = "build_latest_signals" ]; then
+            python -u latest_driver_signals.py
+            python -u build_nickel_latest_signal.py
+            python - <<'PY'
+            import pandas as pd
+            df = pd.read_csv("data/processed/latest_driver_signals.csv")
+            print(df.to_string(index=False))
+            PY
+          fi
+
+          if [ "${{ github.event.inputs.task }}" = "build_nickel_signal" ]; then
+            python -u build_nickel_latest_signal.py
+            python - <<'PY'
+            import pandas as pd
+            df = pd.read_csv("data/processed/latest_driver_signals.csv")
+            print(df[df["driver_group"].astype(str).str.upper() == "NICKEL"].to_string(index=False))
+            PY
+          fi
+
+          if [ "${{ github.event.inputs.task }}" = "build_gold_hrta_confidence" ]; then
+            python -u build_gold_hrta_confidence_signal.py
+            python - <<'PY'
+            import pandas as pd
+            df = pd.read_csv("data/processed/gold_hrta_confidence_signal.csv")
+            print(df.to_string(index=False))
+            PY
+          fi
+
+          if [ "${{ github.event.inputs.task }}" = "telegram_dry_run" ]; then
+            python -u notify_driver_signals.py --dry-run --force
+          fi
+
+          if [ "${{ github.event.inputs.task }}" = "full_driver_pipeline" ]; then
+            python -u merge_latest_coal_raw.py
+            python -u update_drivers.py
+            python -u build_gold_processed_backtest.py
+            python -u latest_driver_signals.py
+            python -u build_nickel_latest_signal.py
+            python -u build_gold_hrta_confidence_signal.py
+            python -u notify_driver_signals.py --dry-run --force
+          fi
+
+      - name: Commit outputs
+        if: ${{ github.event.inputs.commit_outputs == 'true' }}
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add data/driver_prices.csv || true
+          git add data/driver_scores.csv || true
+          git add data/processed/latest_driver_signals.csv || true
+          git add data/processed/gold_hrta_confidence_signal.csv || true
+          git add data/processed/gold_backtest_summary.csv || true
+          git add data/processed/gold_trade_details.csv || true
+          git add data/processed/gold_year_by_year.csv || true
+          git add data/driver_signal_notify_state.json || true
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "manual lab runner output update"
+            git pull --rebase origin main
+            git push
+          fi
