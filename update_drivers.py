@@ -187,9 +187,12 @@ def load_coal_driver_from_raw():
     price_col = None
 
     for col in raw.columns:
-        if col.lower() in ["date", "driver_date"]:
+        col_lower = col.lower().strip()
+
+        if col_lower in ["date", "driver_date"]:
             date_col = col
-        if col.lower() in ["price", "close", "last", "value"]:
+
+        if col_lower in ["price", "close", "last", "value"]:
             price_col = col
 
     if date_col is None:
@@ -198,16 +201,19 @@ def load_coal_driver_from_raw():
     if price_col is None:
         raise ValueError(f"COAL raw price column not found. Columns: {raw.columns.tolist()}")
 
-    coal = pd.DataFrame()
-    coal["driver"] = "COAL"
-    coal["driver_date"] = pd.to_datetime(
-        raw[date_col],
-        format="mixed",
-        errors="coerce",
-    )
-    coal["value"] = safe_numeric(raw[price_col])
+    coal = pd.DataFrame({
+        "driver_date": pd.to_datetime(
+            raw[date_col],
+            format="mixed",
+            errors="coerce",
+        ),
+        "value": safe_numeric(raw[price_col]),
+    })
 
-    coal = coal.dropna(subset=["driver_date", "value"])
+    coal["driver"] = "COAL"
+
+    coal = coal[["driver", "driver_date", "value"]]
+    coal = coal.dropna(subset=["driver", "driver_date", "value"])
     coal = coal.drop_duplicates(subset=["driver", "driver_date"], keep="last")
     coal = coal.sort_values("driver_date").reset_index(drop=True)
 
@@ -218,8 +224,7 @@ def load_coal_driver_from_raw():
             f"value={latest['value']}"
         )
 
-    return coal[["driver", "driver_date", "value"]]
-    
+    return coal    
 # =====================================================
 # MAIN
 # =====================================================
