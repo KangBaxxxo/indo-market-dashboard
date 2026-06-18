@@ -173,20 +173,71 @@ def build_driver_scores(driver_prices: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame(rows)
 
+def load_coal_driver_from_raw():
+    raw_path = Path("data/raw/newcastle_coal.csv")
 
+    if not raw_path.exists():
+        print(f"COAL raw file not found: {raw_path}")
+        return pd.DataFrame(columns=["driver", "driver_date", "value"])
+
+    raw = pd.read_csv(raw_path)
+    raw.columns = [str(c).strip() for c in raw.columns]
+
+    date_col = None
+    price_col = None
+
+    for col in raw.columns:
+        if col.lower() in ["date", "driver_date"]:
+            date_col = col
+        if col.lower() in ["price", "close", "last", "value"]:
+            price_col = col
+
+    if date_col is None:
+        raise ValueError(f"COAL raw date column not found. Columns: {raw.columns.tolist()}")
+
+    if price_col is None:
+        raise ValueError(f"COAL raw price column not found. Columns: {raw.columns.tolist()}")
+
+    coal = pd.DataFrame()
+    coal["driver"] = "COAL"
+    coal["driver_date"] = pd.to_datetime(
+        raw[date_col],
+        format="mixed",
+        errors="coerce",
+    )
+    coal["value"] = safe_numeric(raw[price_col])
+
+    coal = coal.dropna(subset=["driver_date", "value"])
+    coal = coal.drop_duplicates(subset=["driver", "driver_date"], keep="last")
+    coal = coal.sort_values("driver_date").reset_index(drop=True)
+
+    if not coal.empty:
+        latest = coal.tail(1).iloc[0]
+        print(
+            f"LOAD COAL RAW: latest={latest['driver_date'].date()} "
+            f"value={latest['value']}"
+        )
+
+    return coal[["driver", "driver_date", "value"]]
+    
 # =====================================================
 # MAIN
 # =====================================================
 def main():
     existing = load_existing_driver_prices(OUTPUT_PATH)
 
-    # Preserve non-YFinance drivers seperti COAL dari existing driver_prices.csv
+    existing["driver"] = existing["driver"].apply(normalize_driver_name)
+
+    # Preserve non-YFinance drivers selain COAL.
+    # COAL sekarang selalu rebuild dari data/raw/newcastle_coal.csv
     preserved = existing[
         existing["driver"].isin(PRESERVE_DRIVERS)
+        & (existing["driver"] != "COAL")
     ].copy()
 
-    yf_frames = []
+    coal_data = load_coal_driver_from_raw()
 
+    yf_frames = []
     for driver_name, symbol in YF_DRIVERS.items():
         downloaded = download_yfinance_driver(driver_name, symbol)
 
@@ -198,7 +249,7 @@ def main():
     else:
         yf_data = pd.DataFrame(columns=["driver", "driver_date", "value"])
 
-    merged = pd.concat([preserved, yf_data], ignore_index=True)
+    merged = pd.concat([preserved, coal_data, yf_data], ignore_index=True)
 
     merged["driver"] = merged["driver"].apply(normalize_driver_name)
     merged["driver_date"] = pd.to_datetime(merged["driver_date"], format="mixed", errors="coerce")
