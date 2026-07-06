@@ -46,6 +46,7 @@ extra_tickers = [
     "MDKA.JK",
     "BRMS.JK",
     "EMAS.JK",
+    "ARCI.JK",
 
     # Coal driver universe
     "ADRO.JK",
@@ -400,6 +401,7 @@ watchlist_check = [
     "BUMI.JK",
     "INCO.JK",
     "NCKL.JK",
+    "ARCI.JK",
     "MBMA.JK"
 ]
 

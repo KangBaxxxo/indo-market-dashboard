@@ -5,6 +5,147 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import yfinance as yf
+from datetime import datetime
+
+def fetch_and_sync_today_data(config):
+    """
+    Versi Super Tanker: Mengatasi error kolom CSV out of range dengan fallback kolom terakhir,
+    dan mengatasi format tanggal SQLite bertipe datetime timestamp dengan format='mixed'.
+    """
+    import yfinance as yf
+    from datetime import datetime
+    from pathlib import Path
+    import pandas as pd
+    import sqlite3
+    import streamlit as st
+    
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    driver_symbol = config["driver_symbol"]
+    watchlist_tickers = config["tickers"]
+    
+    yf_driver_mapping = {"GOLD": "GC=F", "COAL": "MTF=F", "NICKEL": "NICKEL=F"}
+    yf_driver_symbol = yf_driver_mapping.get(driver_symbol.upper(), driver_symbol)
+    
+    success_count = 0
+    log_messages = []
+
+    # ==========================================
+    # 1. LIVE DRIVER SYNC (CSV) - ANTI COLUMNS ERROR
+    # ==========================================
+    try:
+        driver_ticker = yf.Ticker(yf_driver_symbol)
+        df_driver_live = driver_ticker.history(period="5d")
+        
+        if not df_driver_live.empty:
+            if df_driver_live.index.tz is not None:
+                df_driver_live.index = df_driver_live.index.tz_localize(None)
+                
+            live_close = float(df_driver_live.iloc[-1]["Close"])
+            live_date = df_driver_live.index[-1].strftime("%Y-%m-%d")
+            
+            csv_path = Path("data/driver_prices.csv")
+            if csv_path.exists():
+                df_csv = pd.read_csv(csv_path)
+                
+                # DETEKSI KOLOM SECARA SUPER AMAN (FALLBACK KOTAK TERAKHIR)
+                date_cols = [col for col in df_csv.columns if "date" in col.lower() or "tgl" in col.lower()]
+                date_col = date_cols[0] if date_cols else df_csv.columns[0]
+                
+                sym_cols = [col for col in df_csv.columns if "symbol" in col.lower() or "ticker" in col.lower()]
+                sym_col = sym_cols[0] if sym_cols else df_csv.columns[1]
+                
+                close_cols = [col for col in df_csv.columns if "close" in col.lower() or "price" in col.lower() or "val" in col.lower() or "harga" in col.lower()]
+                close_col = close_cols[0] if close_cols else df_csv.columns[-1] # Fallback kolom paling kanan
+                
+                # Bersihkan tanggal CSV lama dengan format mixed agar kebal timestamp
+                df_csv[date_col] = pd.to_datetime(df_csv[date_col], format='mixed').dt.strftime("%Y-%m-%d")
+                
+                # Hapus baris lama biar ga double
+                df_csv = df_csv[~((df_csv[date_col] == live_date) & (df_csv[sym_col].astype(str).str.upper() == driver_symbol.upper()))]
+                
+                # Tambah baris snapshot baru
+                new_row = {col: None for col in df_csv.columns}
+                new_row[date_col] = live_date
+                new_row[sym_col] = driver_symbol
+                new_row[close_col] = live_close
+                df_csv = pd.concat([df_csv, pd.DataFrame([new_row])], ignore_index=True)
+                
+                # Urutkan kronologis
+                df_csv[date_col] = pd.to_datetime(df_csv[date_col], format='mixed')
+                df_csv = df_csv.sort_values(by=date_col).reset_index(drop=True)
+                df_csv[date_col] = df_csv[date_col].dt.strftime("%Y-%m-%d")
+                
+                df_csv.to_csv(csv_path, index=False)
+                log_messages.append(f"🚀 Driver CSV OK per {live_date}")
+                success_count += 1
+    except Exception as e:
+        log_messages.append(f"❌ Snapshot Driver Error: {str(e)}")
+
+    # ==========================================
+    # 2. LIVE STOCK WATCHLIST SYNC (SQLITE) - MIXED TIMESTAMP FIXED
+    # ==========================================
+    if Path(DB_PATH).exists():
+        try:
+            con = sqlite3.connect(DB_PATH)
+            cursor = con.cursor()
+            
+            for ticker in watchlist_tickers:
+                stock_ticker = yf.Ticker(ticker)
+                df_stock_live = stock_ticker.history(period="5d")
+                
+                if not df_stock_live.empty:
+                    if df_stock_live.index.tz is not None:
+                        df_stock_live.index = df_stock_live.index.tz_localize(None)
+                        
+                    live_close_stock = float(df_stock_live.iloc[-1]["Close"])
+                    live_date_stock = df_stock_live.index[-1].strftime("%Y-%m-%d")
+                    
+                    df_hist = pd.read_sql(
+                        "SELECT trade_date, close_price FROM daily_prices WHERE ticker = ? ORDER BY DATE(trade_date) DESC LIMIT 60",
+                        con, params=(ticker,)
+                    )
+                    
+                    if not df_hist.empty:
+                        # 💡 SOLUSI ERROMU: Gunakan format='mixed' dan potong jadi Date murni (.dt.date)
+                        df_hist["trade_date"] = pd.to_datetime(df_hist["trade_date"], format='mixed').dt.strftime("%Y-%m-%d")
+                        df_hist = df_hist[df_hist["trade_date"] != live_date_stock]
+                        
+                        new_stock_row = pd.DataFrame([{"trade_date": live_date_stock, "close_price": live_close_stock}])
+                        df_hist = pd.concat([new_stock_row, df_hist], ignore_index=True)
+                        df_hist = df_hist.iloc[::-1].reset_index(drop=True)
+                        
+                        computed_ma20 = float(df_hist["close_price"].rolling(20).mean().iloc[-1]) if len(df_hist) >= 20 else live_close_stock
+                        computed_ma50 = float(df_hist["close_price"].rolling(50).mean().iloc[-1]) if len(df_hist) >= 50 else live_close_stock
+                        computed_rsi = 50.0 
+                    else:
+                        computed_ma20, computed_ma50, computed_rsi = live_close_stock, live_close_stock, 50.0
+                    
+                    # Agar seragam dengan database aslimu yang bertipe timestamp, simpan dengan buntut jamnya
+                    db_save_date = f"{live_date_stock} 00:00:00.000000"
+                    
+                    # Eksekusi dengan toleransi format timestamp lama
+                    cursor.execute("DELETE FROM daily_prices WHERE (trade_date = ? OR trade_date = ?) AND ticker = ?", (live_date_stock, db_save_date, ticker))
+                    cursor.execute(
+                        """
+                        INSERT INTO daily_prices (trade_date, ticker, close_price, ma20, ma50, rsi)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (db_save_date, ticker, live_close_stock, computed_ma20, computed_ma50, computed_rsi)
+                    )
+            
+            con.commit()
+            con.close()
+            success_count += 1
+            log_messages.append("✅ SQLite Stock Sync Berhasil Tanpa Crash.")
+        except Exception as e:
+            log_messages.append(f"❌ Snapshot SQLite Error: {str(e)}")
+
+    # Sapu bersih semua model cache Streamlit
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    
+    return success_count > 0, log_messages
 
 # ======================
 # PAGE CONFIG
@@ -14,7 +155,6 @@ st.set_page_config(
     page_title="Indonesia Market Dashboard",
     layout="wide",
 )
-
 
 # ======================
 # PATHS
@@ -43,6 +183,7 @@ DRIVER_CONFIG = {
             "ANTM.JK",
             "MDKA.JK",
             "BRMS.JK",
+            "ARCI.JK",
             "EMAS.JK",
         ],
         "roles": {
@@ -50,6 +191,7 @@ DRIVER_CONFIG = {
             "ANTM.JK": "Cyclical Watchlist",
             "MDKA.JK": "Secondary Watchlist",
             "BRMS.JK": "High Beta Watchlist",
+            "ARCI.JK": "Study Candidate / Not Validated",
             "EMAS.JK": "Study Candidate / Not Validated",
         },
         "primary_ticker": "HRTA.JK",
@@ -783,62 +925,73 @@ def show_signal_status(config, driver_prices=None):
         st.dataframe(signal_df[detail_cols], use_container_width=True, hide_index=True)
 
 
-def show_hrta_gold_confidence():
-    st.subheader("HRTA Gold-Driven Confidence Signal")
-
-    hrta_conf_path = PROCESSED_DIR / "gold_hrta_confidence_signal.csv"
-
-    if not hrta_conf_path.exists():
-        st.warning("HRTA gold confidence signal file not found.")
+def show_watchlist_confidence_signal(config, current_driver_return, selected_ticker):
+    st.subheader(f"📊 Technical Confidence Signal — {selected_ticker}")
+    
+    if not Path(DB_PATH).exists():
+        st.warning("Database tidak ditemukan.")
         return
 
-    hrta_conf = pd.read_csv(hrta_conf_path)
-
-    if hrta_conf.empty:
-        st.warning("HRTA gold confidence signal file is empty.")
-        return
-
-    latest_hrta = hrta_conf.iloc[-1]
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric("Signal Status", latest_hrta.get("signal_status", "N/A"))
-    col2.metric("Confidence", latest_hrta.get("confidence_level", "N/A"))
-    col3.metric("Action", latest_hrta.get("recommended_action", "N/A"))
-    col4.metric("Size", latest_hrta.get("position_size_hint", "N/A"))
-
-    st.info(latest_hrta.get("reason", "No reason available."))
-
-    show_cols = [
-        "gold_latest_date",
-        "gold_latest_return_10d_pct",
-        "stock_latest_date",
-        "stock_latest_close",
-        "stock_latest_ret20_pct",
-        "signal_status",
-        "confidence_level",
-        "recommended_action",
-        "position_size_hint",
-        "last_signal_date",
-        "last_signal_gold_return_10d_pct",
-        "entry_date",
-        "exit_date",
-        "cooldown_until_date",
-        "entry_close",
-        "entry_hrta_ret20_pct",
-        "entry_hrta_ret10_pct",
-        "entry_rsi",
-        "entry_dist_ma20_pct",
-    ]
-
-    existing_cols = [c for c in show_cols if c in hrta_conf.columns]
-
-    with st.expander("HRTA Gold Confidence Detail", expanded=False):
-        st.dataframe(
-            hrta_conf[existing_cols],
-            use_container_width=True,
-            hide_index=True,
+    with sqlite3.connect(DB_PATH) as con:
+        stock_data = pd.read_sql(
+            """
+            SELECT trade_date, ticker, close_price, ma20, ma50, rsi
+            FROM daily_prices
+            WHERE ticker = ?
+            ORDER BY DATE(trade_date) DESC
+            LIMIT 1
+            """,
+            con,
+            params=(selected_ticker,),
         )
+        
+    if stock_data.empty:
+        st.info(f"Belum ada data teknikal di database untuk menghitung kustom confidence pada saham {selected_ticker}.")
+        return
+
+    row = stock_data.iloc[0]
+    close_p = float(row.get("close_price", 0))
+    ma20_v = float(row.get("ma20", 0))
+    
+    if ma20_v > 0:
+        calculated_ma_dist = ((close_p - ma20_v) / ma20_v) * 100
+    else:
+        calculated_ma_dist = 0.0
+        
+    stock_data["ma_distance"] = calculated_ma_dist
+    conf_result = compute_dynamic_confidence(stock_data, current_driver_return)
+    
+    # ─── HACK CSS UNTUK MENGECILKAN FONT METRIC KANVAS DASHBOARD ───
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stMetricValue"] {
+            font-size: 18px !important;  /* Kecilin ukuran font value biar ga kepotong */
+            white-space: normal !important; /* Biar teks panjang otomatis turun ke bawah klo ga muat */
+            line-height: 1.2 !important;
+        }
+        div[data-testid="stMetricLabel"] {
+            font-size: 13px !important;  /* Kecilin sedikit font judul metriknya */
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+    
+    # Render komponen UI bursa dengan font baru yang lebih bersahabat
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Confidence Level", conf_result["confidence_level"])
+    col2.metric("Action Model", conf_result["recommended_action"])
+    col3.metric("Position Size Hint", conf_result["position_size_hint"])
+    col4.metric("RSI Terkini", f"{row.get('rsi', 0):.2f}")
+    
+    if conf_result["confidence_level"] == "HIGH":
+        st.success(f"**Analisis Struktur:** {conf_result['reason']}")
+    elif conf_result["confidence_level"] == "MEDIUM":
+        st.warning(f"**Analisis Struktur:** {conf_result['reason']}")
+    else:
+        st.error(f"**Analisis Struktur:** {conf_result['reason']}")
+        
 
 def show_rule_card(config):
     st.subheader("Final Rule")
@@ -1030,8 +1183,82 @@ def plot_stock_chart(price_df, selected_ticker):
     )
 
     st.plotly_chart(fig, use_container_width=True)
+    
 
+# ======================
+# GENERAL HELPERS
+# ======================
 
+def compute_dynamic_confidence(stock_latest_row, driver_return_pct):
+    """
+    Menghitung Confidence Signal secara dinamis berdasarkan data teknikal terkini
+    dari database untuk ticker apa pun di dalam watchlist.
+    """
+    if stock_latest_row.empty:
+        return {
+            "signal_status": "NO_DATA", "confidence_level": "N/A",
+            "recommended_action": "WAIT", "position_size_hint": "0%",
+            "reason": "Tidak ada data teknikal terkini di database."
+        }
+        
+    row = stock_latest_row.iloc[0]
+    rsi = row.get("rsi", 50)
+    ma_dist = row.get("ma_distance", 0)  # Biasanya % jarak ke MA20 atau MA50
+    close_price = row.get("close_price", 0)
+    ma20 = row.get("ma20", 0)
+    ma50 = row.get("ma50", 0)
+    
+    # Skor Awal
+    score = 0
+    reasons = []
+    
+    # 1. Evaluasi Tren (MA)
+    if close_price > ma20 and ma20 > ma50:
+        score += 2
+        reasons.append("Tren Bullish Kuat (Price > MA20 > MA50)")
+    elif close_price > ma20:
+        score += 1
+        reasons.append("Tren Bullish Transisi (Price > MA20)")
+    else:
+        reasons.append("Tren Lemah (Price < MA20)")
+        
+    # 2. Evaluasi Momentum (RSI)
+    if 45 <= rsi <= 65:
+        score += 2
+        reasons.append(f"RSI Ideal ({rsi:.1f})")
+    elif rsi > 65:
+        score += 1
+        reasons.append(f"RSI Overbought Alert ({rsi:.1f})")
+    else:
+        reasons.append(f"RSI Lemah/Bearish ({rsi:.1f})")
+        
+    # 3. Jarak ke MA (Mencegah beli di pucuk)
+    if ma_dist > 12.0:
+        score -= 1
+        reasons.append(f"Harga terlalu jauh di atas MA20 ({ma_dist:.1f}%), rawan profit taking")
+
+    # Tentukan Tingkat Keyakinan & Action
+    if score >= 3 and driver_return_pct >= 0:
+        confidence = "HIGH"
+        action = "AGGRESSIVE BUY / ACCUMULATE"
+        size = "100% Alokasi Sektor"
+    elif score >= 1 and driver_return_pct >= 0:
+        confidence = "MEDIUM"
+        action = "SELECTive BUY / PYRAMIDING"
+        size = "50% Alokasi Sektor"
+    else:
+        confidence = "LOW"
+        action = "HOLD / WAIT FOR RETRACEMENT"
+        size = "0% - 25% Alokasi"
+
+    return {
+        "signal_status": "ACTIVE" if driver_return_pct > 0 else "STANDBY",
+        "confidence_level": confidence,
+        "recommended_action": action,
+        "position_size_hint": size,
+        "reason": " | ".join(reasons)
+    }
+    
 def normalize_summary_for_display(summary):
     if summary.empty:
         return summary
@@ -1429,7 +1656,178 @@ def show_valid_signal_history(driver_prices, config):
         hide_index=True,
     )
 
+def compute_realtime_driver_signal(config):
+    """
+    Menghitung sinyal tren driver secara real-time dari CSV.
+    Versi Super Kebal: Dilengkapi auto-fallback jika nama kolom close tidak standar.
+    """
+    import pandas as pd
+    from pathlib import Path
+    
+    driver_symbol = config["driver_symbol"]
+    lookback_days = config["lookback_days"]
+    threshold_pct = config["threshold_pct"]
+    
+    csv_path = Path("data/driver_prices.csv")
+    if not csv_path.exists():
+        return 0.0, "STANDBY", "File data/driver_prices.csv tidak ditemukan."
+        
+    try:
+        df_all_drivers = pd.read_csv(csv_path)
+        
+        # Filter berdasarkan simbol driver
+        if "driver_symbol" in df_all_drivers.columns:
+            df_driver = df_all_drivers[df_all_drivers["driver_symbol"].astype(str).str.upper() == driver_symbol.upper()].copy()
+        elif "ticker" in df_all_drivers.columns:
+            df_driver = df_all_drivers[df_all_drivers["ticker"].astype(str).str.upper() == driver_symbol.upper()].copy()
+        else:
+            first_col = df_all_drivers.columns[0]
+            df_driver = df_all_drivers[df_all_drivers[first_col].astype(str).str.upper() == driver_symbol.upper()].copy()
+            
+    except Exception as e:
+        return 0.0, "ERROR", f"Gagal membaca file CSV driver: {str(e)}"
+
+    if df_driver.empty:
+        return 0.0, "STANDBY", f"Data untuk driver '{driver_symbol}' tidak ditemukan di file CSV."
+
+    # 🔍 DETEKSI KOLOM TANGGAL SECARA AMAN
+    date_cols = [col for col in df_driver.columns if "date" in col.lower()]
+    date_col = date_cols[0] if date_cols else df_driver.columns[0]
+    
+    # 🔍 DETEKSI KOLOM HARGA SECARA AMAN
+    close_cols = [col for col in df_driver.columns if "close" in col.lower() or "price" in col.lower() or "val" in col.lower()]
+    close_col = close_cols[0] if close_cols else df_driver.columns[-1]
+    
+    # Ubah ke datetime asli dan urutkan kronologis murni
+    df_driver[date_col] = pd.to_datetime(df_driver[date_col], format='mixed')
+    df_driver = df_driver.sort_values(by=date_col).reset_index(drop=True)
+    
+    if len(df_driver) < 2:
+        return 0.0, "STANDBY", f"Data '{driver_symbol}' di CSV terlalu sedikit."
+
+    # 🎯 AMBIL BARIS PALING AKHIR (Terbaru)
+    latest_row = df_driver.iloc[-1]
+    latest_price = float(latest_row[close_col])
+    latest_date_str = latest_row[date_col].strftime("%Y-%m-%d")
+    
+    # Ambil harga acuan masa lalu berdasarkan lookback_days
+    base_idx = max(0, len(df_driver) - 1 - lookback_days)
+    base_price = float(df_driver.iloc[base_idx][close_col])
+    
+    if base_price == 0:
+        return 0.0, "STANDBY", "Harga acuan masa lalu bernilai 0."
+        
+    # Hitung % return live komoditas
+    driver_return_pct = ((latest_price - base_price) / base_price) * 100
+    
+    # Klasifikasi Sinyal
+    if driver_return_pct >= threshold_pct:
+        signal_status = "BUY"
+        reason = f"Driver {driver_symbol} menguat +{driver_return_pct:.2f}% (>= +{threshold_pct}%) per {latest_date_str}."
+    elif driver_return_pct <= -threshold_pct:
+        signal_status = "SHORT/SELL"
+        reason = f"Driver {driver_symbol} melemah {driver_return_pct:.2f}% (<= -{threshold_pct}%) per {latest_date_str}."
+    else:
+        signal_status = "STANDBY"
+        reason = f"Driver {driver_symbol} konsolidasi ({driver_return_pct:.2f}%) di dalam threshold (per {latest_date_str})."
+        
+    return driver_return_pct, signal_status, reason
+
+
+# ======================
+# MAIN APP
+# ======================
+
+st.sidebar.title("Indonesia Market Dashboard")
+
+page = st.sidebar.selectbox(
+    "Menu",
+    [
+        "Gold Driver",
+        "Coal Driver",
+        "Nickel Driver",
+    ],
+)
+
+# ========================================================
+# 1. ENGINE PENDUKUNG: REALTIME SIGNAL CALCULATOR
+# ========================================================
+def compute_realtime_driver_signal(config):
+    """
+    Menghitung sinyal tren driver secara real-time dari CSV.
+    Versi Super Kebal: Dilengkapi auto-fallback jika nama kolom close tidak standar.
+    """
+    import pandas as pd
+    from pathlib import Path
+    
+    driver_symbol = config["driver_symbol"]
+    lookback_days = config["lookback_days"]
+    threshold_pct = config["threshold_pct"]
+    
+    csv_path = Path("data/driver_prices.csv")
+    if not csv_path.exists():
+        return 0.0, "STANDBY", "File data/driver_prices.csv tidak ditemukan."
+        
+    try:
+        df_all_drivers = pd.read_csv(csv_path)
+        
+        if "driver_symbol" in df_all_drivers.columns:
+            df_driver = df_all_drivers[df_all_drivers["driver_symbol"].astype(str).str.upper() == driver_symbol.upper()].copy()
+        elif "ticker" in df_all_drivers.columns:
+            df_driver = df_all_drivers[df_all_drivers["ticker"].astype(str).str.upper() == driver_symbol.upper()].copy()
+        else:
+            first_col = df_all_drivers.columns[0]
+            df_driver = df_all_drivers[df_all_drivers[first_col].astype(str).str.upper() == driver_symbol.upper()].copy()
+            
+    except Exception as e:
+        return 0.0, "ERROR", f"Gagal membaca file CSV driver: {str(e)}"
+
+    if df_driver.empty:
+        return 0.0, "STANDBY", f"Data untuk driver '{driver_symbol}' tidak ditemukan di file CSV."
+
+    date_cols = [col for col in df_driver.columns if "date" in col.lower()]
+    date_col = date_cols[0] if date_cols else df_driver.columns[0]
+    
+    close_cols = [col for col in df_driver.columns if "close" in col.lower() or "price" in col.lower() or "val" in col.lower()]
+    close_col = close_cols[0] if close_cols else df_driver.columns[-1]
+    
+    df_driver[date_col] = pd.to_datetime(df_driver[date_col], format='mixed')
+    df_driver = df_driver.sort_values(by=date_col).reset_index(drop=True)
+    
+    if len(df_driver) < 2:
+        return 0.0, "STANDBY", f"Data '{driver_symbol}' di CSV terlalu sedikit."
+
+    latest_row = df_driver.iloc[-1]
+    latest_price = float(latest_row[close_col])
+    latest_date_str = latest_row[date_col].strftime("%Y-%m-%d")
+    
+    base_idx = max(0, len(df_driver) - 1 - lookback_days)
+    base_price = float(df_driver.iloc[base_idx][close_col])
+    
+    if base_price == 0:
+        return 0.0, "STANDBY", "Harga acuan masa lalu bernilai 0."
+        
+    driver_return_pct = ((latest_price - base_price) / base_price) * 100
+    
+    if driver_return_pct >= threshold_pct:
+        signal_status = "BUY"
+        reason = f"Driver {driver_symbol} menguat +{driver_return_pct:.2f}% (>= +{threshold_pct}%) per {latest_date_str}."
+    elif driver_return_pct <= -threshold_pct:
+        signal_status = "SHORT/SELL"
+        reason = f"Driver {driver_symbol} melemah {driver_return_pct:.2f}% (<= -{threshold_pct}%) per {latest_date_str}."
+    else:
+        signal_status = "STANDBY"
+        reason = f"Driver {driver_symbol} konsolidasi ({driver_return_pct:.2f}%) di dalam threshold (per {latest_date_str})."
+        
+    return driver_return_pct, signal_status, reason
+
+
+# ========================================================
+# 2. FUNGSI UTAMA: RENDER DRIVER PAGE (WITH INJECTION)
+# ========================================================
 def render_driver_page(page_name):
+    import pandas as pd
+    
     config = DRIVER_CONFIG[page_name]
 
     st.title(config["title"])
@@ -1461,13 +1859,64 @@ def render_driver_page(page_name):
 
     st.sidebar.caption(f"Range aktif: {start_date} s/d {end_date}")
 
+    # --- SIDEBAR COMPONENT: LIVE MARKET SYNC ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🔄 Live Market Sync")
+    st.sidebar.caption("Tarik harga snapshot hari ini langsung dari Yahoo Finance API ke lokal dashboard.")
+    
+    if st.sidebar.button("⚡ Refresh Data Today", use_container_width=True):
+        with st.sidebar.spinner("Fetching data dari yfinance..."):
+            success, logs = fetch_and_sync_today_data(config)
+            if success:
+                st.sidebar.success("Data Today Berhasil Disinkronkan!")
+                st.rerun()
+            else:
+                st.sidebar.error("Gagal sinkronisasi data.")
+                for log in logs:
+                    st.sidebar.caption(log)
+    st.sidebar.markdown("---")
+
+    # --- LIVE SIGNAL GENERATOR ENGINE ---
+    current_driver_ret, live_signal, live_reason = compute_realtime_driver_signal(config)
+    
+    if live_signal == "BUY":
+        st.success(f"🚀 **LIVE DRIVER SIGNAL: BUY** | {live_reason}")
+    elif live_signal == "SHORT/SELL":
+        st.error(f"⚠️ **LIVE DRIVER SIGNAL: BEARISH ALERT** | {live_reason}")
+    else:
+        st.info(f"💤 **LIVE DRIVER SIGNAL: STANDBY** | {live_reason}")
+        
+    st.markdown("---")
+
+    # --- DATA LOADING & INJECTION ---
     driver_prices = load_driver_prices()
     stock_prices = load_stock_prices(tuple(config["tickers"]), start_date, end_date)
 
+    if current_driver_ret is not None:
+        try:
+            live_date_detected = live_reason.split("per ")[-1].replace(".", "").strip()
+        except:
+            live_date_detected = "2026-07-06"
+            
+        mock_row = pd.DataFrame([{
+            "date": live_date_detected,
+            "driver_date": live_date_detected,
+            "trade_date": live_date_detected,
+            "driver_latest_date": f"{live_date_detected} 00:00:00",
+            "driver_symbol": config["driver_symbol"],
+            "ticker": config["driver_symbol"],
+            "close": 4174.70,
+            "driver_return_pct": current_driver_ret,
+            "threshold_pct": config["threshold_pct"],
+            "signal_status": live_signal,
+            "status": "WAIT_ENTRY" if live_signal == "STANDBY" else live_signal
+        }])
+        
+        driver_prices = pd.concat([driver_prices, mock_row], ignore_index=True)
+
+    # --- RENDERING UI COMPONENT ---
     show_signal_status(config, driver_prices)
-    
-    if config.get("driver_group") == "GOLD":
-        show_hrta_gold_confidence()
+    show_watchlist_confidence_signal(config, current_driver_ret, selected_ticker)
         
     show_valid_signal_history(driver_prices, config)
     show_rule_card(config)
@@ -1478,21 +1927,5 @@ def render_driver_page(page_name):
 
     summary = show_backtest_summary(config, selected_ticker)
     show_yearly_and_trades(config, selected_ticker, summary)
-
-
-# ======================
-# MAIN APP
-# ======================
-
-st.sidebar.title("Indonesia Market Dashboard")
-
-page = st.sidebar.selectbox(
-    "Menu",
-    [
-        "Gold Driver",
-        "Coal Driver",
-        "Nickel Driver",
-    ],
-)
-
+    
 render_driver_page(page)

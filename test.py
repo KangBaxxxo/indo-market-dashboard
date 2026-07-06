@@ -1,7 +1,5 @@
-import yfinance as yf
+import pandas as pd
 
-ticker = yf.Ticker("BBCA.JK")
+driver = pd.read_csv("data/driver_prices.csv")
 
-df = ticker.history(period="5d")
-
-print(df)
+print(sorted(driver["driver"].unique()))
