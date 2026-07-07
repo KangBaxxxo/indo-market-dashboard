@@ -1,6 +1,0 @@
-driver,ticker,rule,driver_symbol,lookback_days,threshold_pct,hold_days,cooldown_days,total_trades,wins,losses,win_rate,profit_factor,compound_return_pct,avg_trade_return_pct,median_trade_return_pct,best_trade_pct,worst_trade_pct,max_drawdown_pct,score
-GOLD,HRTA.JK,GOLD >= +5% in 10D | Hold 10D | Cooldown 20D,GOLD,10,5.0,10,20,30,20,10,66.67,3.3177,257.63,5.08,2.57,49.74,-23.38,-29.04,0.40492
-GOLD,MDKA.JK,GOLD >= +5% in 10D | Hold 10D | Cooldown 20D,GOLD,10,5.0,10,20,36,23,13,63.89,1.7014,68.39,1.91,1.82,21.74,-19.04,-33.12,0.371383
-GOLD,ANTM.JK,GOLD >= +5% in 10D | Hold 10D | Cooldown 20D,GOLD,10,5.0,10,20,80,36,44,45.0,1.2327,-3.54,0.87,0.0,34.93,-57.48,-76.66,0.334778
-GOLD,BRMS.JK,GOLD >= +5% in 10D | Hold 10D | Cooldown 20D,GOLD,10,5.0,10,20,49,20,29,40.82,1.548,55.68,1.62,0.0,36.73,-26.42,-42.25,0.325682
-GOLD,EMAS.JK,GOLD >= +5% in 10D | Hold 10D | Cooldown 20D,GOLD,10,5.0,10,20,6,1,5,16.67,0.3522,-24.91,-4.3,-6.88,14.02,-11.49,-30.25,0.070476
