@@ -63,7 +63,32 @@ extra_tickers = [
     "MBMA.JK",
 ]
 
-tickers = mapping_tickers + extra_tickers
+# ========================================================
+# 🚀 MODIFIKASI: DETEKSI ARGUMEN TURBO REFRESH
+# ========================================================
+import sys
+
+is_turbo_mode = False
+watchlist_args = []
+
+if "--tickers" in sys.argv:
+    try:
+        idx = sys.argv.index("--tickers")
+        tickers_input = sys.argv[idx+1]
+        watchlist_args = [t.strip().upper() for t in tickers_input.split() if t.strip()]
+        if watchlist_args:
+            is_turbo_mode = True
+            print(f"⚡ Mode Turbo Aktif: Hanya memproses {len(watchlist_args)} saham watchlist.")
+    except Exception as e:
+        is_turbo_mode = False
+
+# Jika mode turbo aktif, kita hanya download yang diminta saja
+if is_turbo_mode:
+    tickers = watchlist_args
+else:
+    tickers = mapping_tickers + extra_tickers
+    
+# ==========================================================
 
 tickers = [
     t if t.upper().endswith(".JK") else t + ".JK"
@@ -290,12 +315,49 @@ print("=" * 80)
 print("SAVE daily_prices")
 print("=" * 80)
 
-final_df.to_sql(
-    "daily_prices",
-    engine,
-    if_exists="replace",
-    index=False,
-)
+# ========================================================
+# 🚀 MODIFIKASI: SAVE INTELLIGENTLY (ANTI WIPE OUT) - FIXED TIMESTAMP
+# ========================================================
+if is_turbo_mode:
+    print("🔄 Menggabungkan data kilat ke database daily_prices yang sudah ada...")
+    with engine.begin() as conn:
+        # Hapus data tanggal hari ini untuk emiten yang di-update agar tidak duplikat
+        formatted_tickers = ", ".join([f"'{t}'" for t in tickers])
+        trade_dates_to_clean = final_df["trade_date"].dt.strftime("%Y-%m-%d %H:%M:%S").unique()
+        
+        for d_str in trade_dates_to_clean:
+            conn.execute(
+                text(f"DELETE FROM daily_prices WHERE ticker IN ({formatted_tickers}) AND trade_date = :d_str"),
+                {"d_str": d_str}
+            )
+    
+    # Masukkan data baru dengan mode 'append' (ditambah ke bawahnya, bukan ditimpa)
+    final_df.to_sql(
+        "daily_prices",
+        engine,
+        if_exists="append",
+        index=False,
+    )
+    
+    # 🔥 FIX: Baca ulang seluruh database untuk keperluan kalkulasi 'latest_snapshot'
+    final_df = pd.read_sql("SELECT * FROM daily_prices", engine)
+    
+    # Kembalikan kolom trade_date ke bentuk STRING/TEXT bersih agar tidak crash saat save snapshot
+    final_df["trade_date"] = pd.to_datetime(final_df["trade_date"])
+    # (Setelah dikalkulasi di proses groupby bawah, tipe data ini aman, tapi kita jaga-jaga 
+    # agar saat to_sql dia otomatis berupa text format standar database lo)
+else:
+    # Jika dijalankan regular/manual tanpa argumen, biarkan replace total seperti aslinya
+    # Namun pastikan tipenya string bersih saat masuk ke SQLite
+    final_df_copy = final_df.copy()
+    final_df_copy["trade_date"] = final_df_copy["trade_date"].dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+    final_df_copy.to_sql(
+        "daily_prices",
+        engine,
+        if_exists="replace",
+        index=False,
+    )
+# =========================================================
 
 print(f"daily_prices rows saved: {len(final_df):,}")
 
@@ -346,12 +408,52 @@ latest_snapshot["is_volume_spike"] = (
 # SAVE LATEST SNAPSHOT
 # ======================
 
+# ========================================================
+# 🚀 MODIFIKASI: UPDATE LATEST SNAPSHOT SECARA AMAN
+# ========================================================
+if is_turbo_mode:
+    print("🔄 Memperbarui tabel latest_snapshot khusus emiten aktif...")
+    # Ambit snapshot lama dari DB
+    try:
+        old_snapshot = pd.read_sql("SELECT * FROM latest_snapshot", engine)
+        # Buang emiten yang baru saja di-update dari snapshot lama
+        old_snapshot = old_snapshot[~old_snapshot["ticker"].isin(tickers)]
+        # Gabungkan dengan snapshot tergres hasil download kita
+        latest_snapshot = pd.concat([old_snapshot, latest_snapshot], ignore_index=True)
+    except Exception:
+        pass
+
+# Paksa kolom trade_date di latest_snapshot menjadi string bersih sebelum masuk .to_sql
+latest_snapshot["trade_date"] = pd.to_datetime(latest_snapshot["trade_date"]).dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+# ========================================================
+# 🚀 MODIFIKASI: UPDATE LATEST SNAPSHOT SECARA AMAN
+# ========================================================
+if is_turbo_mode:
+    print("🔄 Memperbarui tabel latest_snapshot khusus emiten aktif...")
+    try:
+        old_snapshot = pd.read_sql("SELECT * FROM latest_snapshot", engine)
+        old_snapshot = old_snapshot[~old_snapshot["ticker"].isin(tickers)]
+        latest_snapshot = pd.concat([old_snapshot, latest_snapshot], ignore_index=True)
+    except Exception:
+        pass
+
 latest_snapshot.to_sql(
     "latest_snapshot",
     engine,
     if_exists="replace",
     index=False,
 )
+# =========================================================
+
+# Tulis ulang snapshot gabungan yang utuh ke database
+latest_snapshot.to_sql(
+    "latest_snapshot",
+    engine,
+    if_exists="replace",
+    index=False,
+)
+# ===========================================================
 
 print(f"latest_snapshot rows saved: {len(latest_snapshot):,}")
 
