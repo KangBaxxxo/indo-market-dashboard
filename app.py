@@ -1026,76 +1026,88 @@ def plot_driver_chart(config, driver_prices, start_date, end_date):
 
 def plot_stock_chart(stock_prices, selected_ticker, range_option="1D"):
     """
-    Fungsi Chart Pintar: Jika memilih 1D, otomatis menarik data per jam (Hourly)
-    langsung dari yfinance bypass database agar detail intraday-nya kelihatan jelas.
+    Fungsi Chart Pintar: Memastikan data harian di-filter berdasarkan selected_ticker 
+    agar tidak bertumpuk dengan saham lain, dan otomatis beralih ke intraday jika memilih 1D.
     """
     import yfinance as yf
     import pandas as pd
-    import plotly.graph_objects as go # Atau library chart bawaan lo
+    import plotly.graph_objects as go
     import streamlit as st
 
     # ========================================================
-    # 🎯 LOGIKA DETEKSI RANGE 1D (HOURLY BYPASS)
+    # 🎯 FIX TOTAL: FILTER BERDASARKAN TICKER YANG DIPILIH Saja
     # ========================================================
+    # Amankan data harian agar tidak bercampur dengan emiten lain di DB
+    df_daily_filtered = stock_prices[stock_prices["ticker"] == selected_ticker].copy()
+
     if range_option == "1D":
         st.caption(f"🕒 Menampilkan data live per jam (Hourly) untuk {selected_ticker}...")
         try:
-            # Ambil data intraday 1 hari terakhir interval 60 menit
-            df_hourly = yf.download(selected_ticker, period="1d", interval="60m", progress=False)
+            df_hourly = yf.download(selected_ticker, period="1d", interval="60m", auto_adjust=False, progress=False)
             
             if not df_hourly.empty:
                 df_hourly = df_hourly.reset_index()
+                
                 if isinstance(df_hourly.columns, pd.MultiIndex):
-                    df_hourly.columns = [c[0] for c in df_hourly.columns]
+                    df_hourly.columns = [c[0] if c[0] else c[1] for c in df_hourly.columns]
                 
                 df_hourly.columns = [str(c).lower().strip() for c in df_hourly.columns]
                 
-                # 🎯 FIX TIMEZONE & JAM BURSA INDONESIA
-                # Ambil kolom datetime (bisa bernama 'datetime' atau 'index')
                 time_col = 'datetime' if 'datetime' in df_hourly.columns else df_hourly.columns[0]
-                
-                # Paksa konversi ke datetime objek murni
                 df_hourly[time_col] = pd.to_datetime(df_hourly[time_col])
                 
-                # Jika datanya mengandung timezone (aware), ubah paksa ke Asia/Jakarta (WIB)
                 if df_hourly[time_col].dt.tz is not None:
                     df_hourly[time_col] = df_hourly[time_col].dt.tz_convert('Asia/Jakarta')
                 
-                # 🎯 KUNCI UTAMA: Ubah menjadi string teks jam bersih (HH:MM) agar chart tidak merender desimal pecahan
                 df_hourly["display_time"] = df_hourly[time_col].dt.strftime("%H:%M")
                 
+                for col in ['open', 'high', 'low', 'close']:
+                    if col in df_hourly.columns:
+                        df_hourly[col] = pd.to_numeric(df_hourly[col], errors='coerce')
+                
+                df_hourly = df_hourly.dropna(subset=['open', 'high', 'low', 'close'])
+                
                 plot_dataframe = df_hourly
-                x_axis_column = "display_time" # Sumbu X memakai string "09:00", "10:00", dst.
+                x_axis_column = "display_time"
+                open_col, high_col, low_col, close_col = 'open', 'high', 'low', 'close'
             else:
-                plot_dataframe = stock_prices
+                plot_dataframe = df_daily_filtered
                 x_axis_column = "trade_date"
+                open_col, high_col, low_col, close_col = 'open_price', 'high_price', 'low_price', 'close_price'
         except Exception as e:
             st.warning(f"Gagal memuat data hourly live, fallback ke harian: {e}")
-            plot_dataframe = stock_prices
+            plot_dataframe = df_daily_filtered
             x_axis_column = "trade_date"
-            
+            open_col, high_col, low_col, close_col = 'open_price', 'high_price', 'low_price', 'close_price'
     else:
-        # Jika range 1W, 3M, 1Y tetap pakai data harian dari SQLite lo
-        plot_dataframe = stock_prices
+        # 🎯 SEKARANG AMAN: Gunakan dataframe harian yang SUDAH DI-FILTER khusus ticker ini saja
+        plot_dataframe = df_daily_filtered
         x_axis_column = "trade_date"
+        open_col, high_col, low_col, close_col = 'open_price', 'high_price', 'low_price', 'close_price'
 
     # ========================================================
-    # 📉 BAGIAN RENDER CHART (Sesuaikan dengan library lo, ini contoh Plotly)
+    # 📉 BAGIAN RENDER CHART (Plotly Candlestick)
     # ========================================================
-    # Pastikan di dalam kode grafik lo, penentuan sumbu X-nya diganti 
-    # menggunakan variabel 'x_axis_column' dan datanya memakai 'plot_dataframe'
-    
-    # Contoh jika kodenya pakai Plotly Candlestick:
+    if plot_dataframe.empty:
+        st.warning(f"Tidak ada data chart untuk {selected_ticker} di range ini.")
+        return
+
     fig = go.Figure(data=[go.Candlestick(
         x=plot_dataframe[x_axis_column],
-        open=plot_dataframe['open_price'] if 'open_price' in plot_dataframe else plot_dataframe['open'],
-        high=plot_dataframe['high_price'] if 'high_price' in plot_dataframe else plot_dataframe['high'],
-        low=plot_dataframe['low_price'] if 'low_price' in plot_dataframe else plot_dataframe['low'],
-        close=plot_dataframe['close_price'] if 'close_price' in plot_dataframe else plot_dataframe['close']
+        open=plot_dataframe[open_col],
+        high=plot_dataframe[high_col],
+        low=plot_dataframe[low_col],
+        close=plot_dataframe[close_col],
+        name=selected_ticker
     )])
     
-    # Hilangkan range slider bawah yang bikin chart kelihatan sempit
-    fig.update_layout(xaxis_rangeslider_visible=False)
+    fig.update_layout(
+        title=f"Price Chart - {selected_ticker}",
+        xaxis_rangeslider_visible=False,
+        template="plotly_dark",
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
+    
     st.plotly_chart(fig, use_container_width=True)
     
 
