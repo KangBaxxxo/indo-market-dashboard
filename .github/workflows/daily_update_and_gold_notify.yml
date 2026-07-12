@@ -35,15 +35,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ========================================================
-      # 🎯 PINDAH KE SINI: Python & Pandas Udah Ready, Pasti Eksekusi Sempurna!
-      # ========================================================
       - name: Prepare Directory Structure and Dummy Files
         run: |
           mkdir -p data/raw
           mkdir -p data/processed
           
-          # 1. Suntikkan tabel daily_prices pake Python yang udah terinstall
+          # 1. Suntikkan tabel daily_prices LENGKAP dengan semua kolom indikator
           python - <<'PY'
           import sqlite3
           import os
@@ -53,24 +50,29 @@ jobs:
           
           con = sqlite3.connect(db_path)
           cursor = con.cursor()
+          # FIX KOLOM: Tambahkan volume, ma20, ma50, dan rsi agar script signal tidak crash
           cursor.execute("""
               CREATE TABLE IF NOT EXISTS daily_prices (
                   trade_date TEXT,
                   ticker TEXT,
-                  close_price REAL
+                  close_price REAL,
+                  volume REAL,
+                  ma20 REAL,
+                  ma50 REAL,
+                  rsi REAL
               )
           """)
           con.commit()
           con.close()
-          print("Successfully initialized empty market.db with daily_prices table!")
+          print("Successfully initialized market.db with all required indicator columns!")
           PY
           
-          # 2. Inisialisasi file master coal agar tidak kena FileNotFoundError
+          # 2. Inisialisasi file master coal agar tidak kena FileNotFoundError[cite: 1]
           if [ ! -f data/raw/newcastle_coal.csv ]; then
-            echo "Date,Price" > data/raw/newcastle_coal.csv
+            echo "date,price" > data/raw/newcastle_coal.csv
           fi
           if [ ! -f data/raw/newcastle_coal_latest.csv ]; then
-            echo "Date,Price" > data/raw/newcastle_coal_latest.csv
+            echo "date,price" > data/raw/newcastle_coal_latest.csv
           fi
           
           # 3. Inisialisasi file CSV driver minimal agar pd.read_csv tidak error[cite: 1]
