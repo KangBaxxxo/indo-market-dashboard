@@ -34,10 +34,10 @@ jobs:
           
           # FIX CRASH COAL: Inisialisasi file master coal agar tidak kena FileNotFoundError
           if [ ! -f data/raw/newcastle_coal.csv ]; then
-            echo "date,price" > data/raw/newcastle_coal.csv
+            echo "Date,Price" > data/raw/newcastle_coal.csv
           fi
           if [ ! -f data/raw/newcastle_coal_latest.csv ]; then
-            echo "date,price" > data/raw/newcastle_coal_latest.csv
+            echo "Date,Price" > data/raw/newcastle_coal_latest.csv
           fi
           
           # Inisialisasi file CSV driver dengan kolom minimal agar pd.read_csv tidak error
