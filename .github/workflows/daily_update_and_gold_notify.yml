@@ -101,6 +101,30 @@ jobs:
         run: |
           python -u update_drivers.py
 
+      # ========================================================
+      # 🎯 FIX TOTAL: Suntik Ulang Tabel Tepat Sebelum Backtest
+      # ========================================================
+      - name: Ensure daily_prices Table Exists Before Backtest
+        run: |
+          python - <<'PY'
+          import sqlite3
+          import os
+
+          db_path = "data/market.db"
+          con = sqlite3.connect(db_path)
+          cursor = con.cursor()
+          cursor.execute("""
+              CREATE TABLE IF NOT EXISTS daily_prices (
+                  trade_date TEXT,
+                  ticker TEXT,
+                  close_price REAL
+              )
+          """)
+          con.commit()
+          con.close()
+          print("Guaranteed daily_prices table exists right before backtest script!")
+          PY
+          
       - name: Build gold backtest processed files
         run: |
           python -u build_gold_processed_backtest.py
