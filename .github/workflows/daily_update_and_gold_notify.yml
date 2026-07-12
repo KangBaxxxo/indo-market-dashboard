@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ========================================================
-      # 🎯 FIX DI SINI: Bangun Seluruh Folder dan Struktur CSV
+      # 🎯 FIX SEMPURNA: Buat Folder dan File Master Coal Sekalian
       # ========================================================
       - name: Prepare Directory Structure and Dummy Files
         run: |
@@ -31,6 +31,14 @@ jobs:
           
           # Buat DB Market jika dibutuhkan oleh script signal
           touch data/market.db
+          
+          # FIX CRASH COAL: Inisialisasi file master coal agar tidak kena FileNotFoundError
+          if [ ! -f data/raw/newcastle_coal.csv ]; then
+            echo "date,price" > data/raw/newcastle_coal.csv
+          fi
+          if [ ! -f data/raw/newcastle_coal_latest.csv ]; then
+            echo "date,price" > data/raw/newcastle_coal_latest.csv
+          fi
           
           # Inisialisasi file CSV driver dengan kolom minimal agar pd.read_csv tidak error
           if [ ! -f data/driver_prices.csv ]; then
