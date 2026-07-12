@@ -17,4 +17,5 @@ data/output/
 archive/
 
 
-data/
+data/*
+!data/.gitkeep
