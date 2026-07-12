@@ -7,7 +7,6 @@ on:
   workflow_dispatch:
   schedule:
     # 10:00 UTC = 17:00 WIB, Setiap hari
-    # Dibuat setelah Update Market Data supaya market.db sudah fresh dulu.
     - cron: "0 10 * * *"
 
 permissions:
@@ -20,64 +19,6 @@ jobs:
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
-
-      # ========================================================
-      # 🎯 FIX JOLT: Inisialisasi Skema Tabel SQLite Biar Gak Error
-      # ========================================================
-      - name: Prepare Directory Structure and Dummy Files
-        run: |
-          mkdir -p data/raw
-          mkdir -p data/processed
-          
-          # 1. Buat database dan suntikkan tabel daily_prices kosong agar pd.read_sql tidak crash
-          python - <<'PY'
-          import sqlite3
-          import os
-
-          db_path = "data/market.db"
-          os.makedirs(os.path.dirname(db_path), exist_ok=True)
-          
-          con = sqlite3.connect(db_path)
-          cursor = con.cursor()
-          # Buat struktur tabel minimal sesuai yang dicari oleh query script lo
-          cursor.execute("""
-              CREATE TABLE IF NOT EXISTS daily_prices (
-                  trade_date TEXT,
-                  ticker TEXT,
-                  close_price REAL
-              )
-          """)
-          con.commit()
-          con.close()
-          print("Successfully initialized empty market.db with daily_prices table!")
-          PY
-          
-          # 2. FIX CRASH COAL: Inisialisasi file master coal agar tidak kena FileNotFoundError
-          if [ ! -f data/raw/newcastle_coal.csv ]; then
-            echo "Date,Price" > data/raw/newcastle_coal.csv
-          fi
-          if [ ! -f data/raw/newcastle_coal_latest.csv ]; then
-            echo "Date,Price" > data/raw/newcastle_coal_latest.csv
-          fi
-          
-          # 3. Inisialisasi file CSV driver dengan kolom minimal agar pd.read_csv tidak error
-          if [ ! -f data/driver_prices.csv ]; then
-            echo "driver,driver_date,value" > data/driver_prices.csv
-          fi
-          if [ ! -f data/driver_scores.csv ]; then
-            echo "driver,score" > data/driver_scores.csv
-          fi
-          if [ ! -f data/processed/latest_driver_signals.csv ]; then
-            echo "driver_group,driver_symbol,driver_latest_date,driver_return_pct,signal_status,last_signal_date,target_ticker,stock_latest_date" > data/processed/latest_driver_signals.csv
-          fi
-          
-          # 4. Siapkan file state json agar tidak error saat dibaca pertama kali
-          if [ ! -f data/gold_signal_state.json ]; then
-            echo "{}" > data/gold_signal_state.json
-          fi
-          if [ ! -f data/driver_signal_notify_state.json ]; then
-            echo "{}" > data/driver_signal_notify_state.json
-          fi
 
       - name: Show current commit
         run: |
@@ -94,6 +35,64 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ========================================================
+      # 🎯 PINDAH KE SINI: Python & Pandas Udah Ready, Pasti Eksekusi Sempurna!
+      # ========================================================
+      - name: Prepare Directory Structure and Dummy Files
+        run: |
+          mkdir -p data/raw
+          mkdir -p data/processed
+          
+          # 1. Suntikkan tabel daily_prices pake Python yang udah terinstall
+          python - <<'PY'
+          import sqlite3
+          import os
+
+          db_path = "data/market.db"
+          os.makedirs(os.path.dirname(db_path), exist_ok=True)
+          
+          con = sqlite3.connect(db_path)
+          cursor = con.cursor()
+          cursor.execute("""
+              CREATE TABLE IF NOT EXISTS daily_prices (
+                  trade_date TEXT,
+                  ticker TEXT,
+                  close_price REAL
+              )
+          """)
+          con.commit()
+          con.close()
+          print("Successfully initialized empty market.db with daily_prices table!")
+          PY
+          
+          # 2. Inisialisasi file master coal agar tidak kena FileNotFoundError
+          if [ ! -f data/raw/newcastle_coal.csv ]; then
+            echo "date,price" > data/raw/newcastle_coal.csv
+          fi
+          if [ ! -f data/raw/newcastle_coal_latest.csv ]; then
+            echo "date,price" > data/raw/newcastle_coal_latest.csv
+          fi
+          
+          # 3. Inisialisasi file CSV driver minimal agar pd.read_csv tidak error[cite: 1]
+          if [ ! -f data/driver_prices.csv ]; then
+            echo "driver,driver_date,value" > data/driver_prices.csv
+          fi
+          if [ ! -f data/driver_scores.csv ]; then
+            echo "driver,score" > data/driver_scores.csv
+          fi
+          if [ ! -f data/processed/latest_driver_signals.csv ]; then
+            echo "driver_group,driver_symbol,driver_latest_date,driver_return_pct,signal_status,last_signal_date,target_ticker,stock_latest_date" > data/processed/latest_driver_signals.csv
+          fi
+          
+          # 4. Siapkan file state json[cite: 1]
+          if [ ! -f data/gold_signal_state.json ]; then
+            echo "{}" > data/gold_signal_state.json
+          fi
+          if [ ! -f data/driver_signal_notify_state.json ]; then
+            echo "{}" > data/driver_signal_notify_state.json
+          fi
+
+      # Baru setelah itu panggil script pipeline lo seperti biasa[cite: 1]
       - name: Merge latest coal raw
         run: |
           python -u merge_latest_coal_raw.py
