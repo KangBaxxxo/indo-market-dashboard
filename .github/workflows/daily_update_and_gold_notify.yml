@@ -69,10 +69,10 @@ jobs:
           
           # 2. Inisialisasi file master coal agar tidak kena FileNotFoundError[cite: 1]
           if [ ! -f data/raw/newcastle_coal.csv ]; then
-            echo "date,price" > data/raw/newcastle_coal.csv
+            echo "Date,Price" > data/raw/newcastle_coal.csv
           fi
           if [ ! -f data/raw/newcastle_coal_latest.csv ]; then
-            echo "date,price" > data/raw/newcastle_coal_latest.csv
+            echo "Date,Price" > data/raw/newcastle_coal_latest.csv
           fi
           
           # 3. Inisialisasi file CSV driver minimal agar pd.read_csv tidak error[cite: 1]
