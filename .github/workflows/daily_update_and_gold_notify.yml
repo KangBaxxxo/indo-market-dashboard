@@ -21,6 +21,36 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
+      # ========================================================
+      # 🎯 FIX DI SINI: Bangun Seluruh Folder dan Struktur CSV
+      # ========================================================
+      - name: Prepare Directory Structure and Dummy Files
+        run: |
+          mkdir -p data/raw
+          mkdir -p data/processed
+          
+          # Buat DB Market jika dibutuhkan oleh script signal
+          touch data/market.db
+          
+          # Inisialisasi file CSV driver dengan kolom minimal agar pd.read_csv tidak error
+          if [ ! -f data/driver_prices.csv ]; then
+            echo "driver,driver_date,value" > data/driver_prices.csv
+          fi
+          if [ ! -f data/driver_scores.csv ]; then
+            echo "driver,score" > data/driver_scores.csv
+          fi
+          if [ ! -f data/processed/latest_driver_signals.csv ]; then
+            echo "driver_group,driver_symbol,driver_latest_date,driver_return_pct,signal_status,last_signal_date,target_ticker,stock_latest_date" > data/processed/latest_driver_signals.csv
+          fi
+          
+          # Siapkan file state json agar tidak error saat dibaca pertama kali
+          if [ ! -f data/gold_signal_state.json ]; then
+            echo "{}" > data/gold_signal_state.json
+          fi
+          if [ ! -f data/driver_signal_notify_state.json ]; then
+            echo "{}" > data/driver_signal_notify_state.json
+          fi
+
       - name: Show current commit
         run: |
           echo "=== CURRENT COMMIT ==="
