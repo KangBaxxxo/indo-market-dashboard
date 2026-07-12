@@ -22,17 +22,37 @@ jobs:
         uses: actions/checkout@v4
 
       # ========================================================
-      # 🎯 FIX SEMPURNA: Buat Folder dan File Master Coal Sekalian
+      # 🎯 FIX JOLT: Inisialisasi Skema Tabel SQLite Biar Gak Error
       # ========================================================
       - name: Prepare Directory Structure and Dummy Files
         run: |
           mkdir -p data/raw
           mkdir -p data/processed
           
-          # Buat DB Market jika dibutuhkan oleh script signal
-          touch data/market.db
+          # 1. Buat database dan suntikkan tabel daily_prices kosong agar pd.read_sql tidak crash
+          python - <<'PY'
+          import sqlite3
+          import os
+
+          db_path = "data/market.db"
+          os.makedirs(os.path.dirname(db_path), exist_ok=True)
           
-          # FIX CRASH COAL: Inisialisasi file master coal agar tidak kena FileNotFoundError
+          con = sqlite3.connect(db_path)
+          cursor = con.cursor()
+          # Buat struktur tabel minimal sesuai yang dicari oleh query script lo
+          cursor.execute("""
+              CREATE TABLE IF NOT EXISTS daily_prices (
+                  trade_date TEXT,
+                  ticker TEXT,
+                  close_price REAL
+              )
+          """)
+          con.commit()
+          con.close()
+          print("Successfully initialized empty market.db with daily_prices table!")
+          PY
+          
+          # 2. FIX CRASH COAL: Inisialisasi file master coal agar tidak kena FileNotFoundError
           if [ ! -f data/raw/newcastle_coal.csv ]; then
             echo "Date,Price" > data/raw/newcastle_coal.csv
           fi
@@ -40,7 +60,7 @@ jobs:
             echo "Date,Price" > data/raw/newcastle_coal_latest.csv
           fi
           
-          # Inisialisasi file CSV driver dengan kolom minimal agar pd.read_csv tidak error
+          # 3. Inisialisasi file CSV driver dengan kolom minimal agar pd.read_csv tidak error
           if [ ! -f data/driver_prices.csv ]; then
             echo "driver,driver_date,value" > data/driver_prices.csv
           fi
@@ -51,7 +71,7 @@ jobs:
             echo "driver_group,driver_symbol,driver_latest_date,driver_return_pct,signal_status,last_signal_date,target_ticker,stock_latest_date" > data/processed/latest_driver_signals.csv
           fi
           
-          # Siapkan file state json agar tidak error saat dibaca pertama kali
+          # 4. Siapkan file state json agar tidak error saat dibaca pertama kali
           if [ ! -f data/gold_signal_state.json ]; then
             echo "{}" > data/gold_signal_state.json
           fi
